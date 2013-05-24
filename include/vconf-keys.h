@@ -167,24 +167,31 @@ enum {
  * @brief Bluetooth Connected status
  *
  * 0x0000 : Not connected \n
- * 0x0004 : Headset connected \n
- * 0x0010 : A2DP headset connected \n
- * 0x0020 : SAP connected \n
- * 0x0040 : PBAP connected \n
+ * 0x0001 : Headset connected \n
+ * 0x0002 : A2DP headset connected \n
+ * 0x0004 : HID connected \n
+ * 0x0008 : PAN connected \n
+ * 0x0010 : SAP connected \n
+ * 0x0020 : PBAP connected \n
 */
 #define VCONFKEY_BT_DEVICE                          "memory/bluetooth/device"
 enum {
 	/** Not connected */
 	VCONFKEY_BT_DEVICE_NONE = 0x0000,
 	/** Headset connected */
-	VCONFKEY_BT_DEVICE_HEADSET_CONNECTED = 0x0004,
+	VCONFKEY_BT_DEVICE_HEADSET_CONNECTED = 0x0001,
 	/** A2DP headset connected */
-	VCONFKEY_BT_DEVICE_A2DP_HEADSET_CONNECTED = 0x0010,
+	VCONFKEY_BT_DEVICE_A2DP_HEADSET_CONNECTED = 0x0002,
+	/** HID connected */
+	VCONFKEY_BT_DEVICE_HID_CONNECTED = 0x0004,
+	/** PAN connected */
+	VCONFKEY_BT_DEVICE_PAN_CONNECTED = 0x0008,
 	/** SAP connected */
-	VCONFKEY_BT_DEVICE_SAP_CONNECTED = 0x0020,
+	VCONFKEY_BT_DEVICE_SAP_CONNECTED = 0x0010,
 	/** PBAP connected */
-	VCONFKEY_BT_DEVICE_PBAP_CONNECTED = 0x0040
+	VCONFKEY_BT_DEVICE_PBAP_CONNECTED = 0x0020
 };
+
 
 /* Media sound path for BT */
 enum {

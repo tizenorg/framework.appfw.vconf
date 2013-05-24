@@ -31,6 +31,7 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <sys/smack.h>
 #include <fcntl.h>
 #include <errno.h>
 
@@ -57,6 +58,7 @@ const char *MEMORY_INIT = "/opt/var/kdb/memory_init";
 
 static char *guid = NULL;
 static char *uid = NULL;
+static char *smack_label = NULL;
 static char *vconf_type = NULL;
 static int is_recursive = FALSE;
 static int is_initialization = FALSE;
@@ -74,6 +76,8 @@ static GOptionEntry entries[] = {
 	 "memory backend initialization", NULL},
 	{"force", 'f', 0, G_OPTION_ARG_NONE, &is_forced,
 	 "overwrite vconf values by force", NULL},
+	{"smack", 's', 0, G_OPTION_ARG_STRING, &smack_label,
+	 "smack access label", NULL},
 	{NULL}
 };
 
@@ -119,6 +123,16 @@ static void print_help(const char *cmd)
 	fprintf(stderr, "\n");
 	fprintf(stderr,
 		"          -f : Overwrite values by force, even when vconf values are already exist.\n");
+	fprintf(stderr, "\n");
+	fprintf(stderr,
+		"          -s <SMACK LABEL>: Set smack access label for the vconf key.\n");
+	fprintf(stderr,
+		"           Ex) %s set -t string db/testapp/key1 \"This is test\" -s system::vconf_setting\n",
+		cmd);
+	fprintf(stderr,
+		"           NOTE: If -s option is not used, the default smack access label system::vconf will be set.\n");
+	fprintf(stderr,
+		"           NOTE: Maximum label size is 255 byte and '/', '~', ' ' is not permitted.\n");
 	fprintf(stderr, "\n");
 	fprintf(stderr, "[Get vconf value]\n");
 	fprintf(stderr, "       %s get <OPTIONS> <KEY NAME>\n", cmd);
@@ -341,6 +355,16 @@ static int copy_memory_key(char *pszKey, char *pszOrigin)
 		printf("[%s:%d]Fail copy\n", __FILE__, __LINE__);
 		return -1;
 	}
+
+	if (smack_label) {
+		if (smack_setlabel(szPath, smack_label, SMACK_LABEL_ACCESS) < 0) {
+			if (errno != EOPNOTSUPP) {
+				fprintf(stderr, "smack set label (%s) failed (%s)\n", smack_label, szPath);
+				return -1;
+			}
+		}
+	}
+
 	return 0;
 }
 
@@ -404,6 +428,20 @@ int main(int argc, char **argv)
 		if (check_file_path_mode(szFilePath)) {
 			fprintf(stderr, "Error!\t create key %s\n", argv[2]);
 			return -1;
+		}
+
+		if (smack_label) {
+			if (getuid() != 0) {
+				fprintf(stderr,
+					"Error!\t Only root user can use '-s' option\n");
+				return -1;
+			}
+			if (smack_setlabel(szFilePath, smack_label, SMACK_LABEL_ACCESS) < 0) {
+				if (errno != EOPNOTSUPP) {
+					fprintf(stderr, "smack set label (%s) failed (%s)\n", smack_label, szFilePath);
+					return -1;
+				}
+			}
 		}
 
 		switch (set_type) {

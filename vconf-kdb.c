@@ -139,50 +139,50 @@ static gboolean _vconf_kdb_gio_cb(GIOChannel *src, GIOCondition cond, gpointer d
 	while (r > 0) {
 		//INFO("read event from GIOChannel. pid : %d", getpid());
 
-		pthread_mutex_lock(&_kdb_g_ns_mutex);
-		l_notilist = _vconf_copy_noti_list(g_notilist);
-		pthread_mutex_unlock(&_kdb_g_ns_mutex);
+		if (ie.mask & INOTY_EVENT_MASK) {
 
+			pthread_mutex_lock(&_kdb_g_ns_mutex);
+			l_notilist = _vconf_copy_noti_list(g_notilist);
+			pthread_mutex_unlock(&_kdb_g_ns_mutex);
 
-		if (l_notilist) {
+			if (l_notilist) {
 
-			struct noti_node *t = NULL;
-			GList *noti_list = NULL;
+				struct noti_node *t = NULL;
+				GList *noti_list = NULL;
 
-			if (!(ie.mask & INOTY_EVENT_MASK)) {
-				INFO("Invalid argument: ie.mask(%d), ie.len(%d)", ie.mask, ie.len);
-				return TRUE;
-			}
+				noti_list = g_list_first(l_notilist);
 
-			noti_list = g_list_first(l_notilist);
+				while (noti_list) {
+					t = noti_list->data;
 
-			while (noti_list) {
-				t = noti_list->data;
-
-				keynode_t* keynode = _vconf_keynode_new();
-				retvm_if(keynode == NULL, TRUE, "key malloc fail");
-
-				if( (t) && (t->wd == ie.wd) ) {
-					if ((ie.mask & IN_DELETE_SELF)) {
-						INFO("Notify that key(%s) is deleted", t->keyname);
-						_vconf_keynode_set_keyname(keynode, (const char *)t->keyname);
-						_vconf_keynode_set_null(keynode);
-						t->cb(keynode, t->cb_data);
-						_vconf_kdb_del_notify(t->keyname, t->cb);
-					} else {
-						_vconf_keynode_set_keyname(keynode, t->keyname);
-						_vconf_get_key(keynode);
-						t->cb(keynode, t->cb_data);
-						INFO("key(%s) is changed. cb called", t->keyname);
+					keynode_t* keynode = _vconf_keynode_new();
+					if (keynode == NULL) {
+						ERR("key malloc fail");
+						break;
 					}
+
+					if( (t) && (t->wd == ie.wd) ) {
+						if ((ie.mask & IN_DELETE_SELF)) {
+							INFO("Notify that key(%s) is deleted", t->keyname);
+							_vconf_keynode_set_keyname(keynode, (const char *)t->keyname);
+							_vconf_keynode_set_null(keynode);
+							t->cb(keynode, t->cb_data);
+							_vconf_kdb_del_notify(t->keyname, t->cb);
+						} else {
+							_vconf_keynode_set_keyname(keynode, t->keyname);
+							_vconf_get_key(keynode);
+							INFO("key(%s) is changed. cb(%p) called", t->keyname, t->cb);
+							t->cb(keynode, t->cb_data);
+						}
+					}
+
+					_vconf_keynode_free(keynode);
+
+					noti_list = g_list_next(noti_list);
 				}
 
-				_vconf_keynode_free(keynode);
-
-				noti_list = g_list_next(noti_list);
+				_vconf_free_noti_list(l_notilist);
 			}
-
-			_vconf_free_noti_list(l_notilist);
 		}
 
 		if (ie.len > 0)
@@ -372,7 +372,7 @@ _vconf_kdb_del_notify(const char *keyname, vconf_callback_fn cb)
 	noti_list = NULL;
 	noti_list = g_list_find_custom(g_notilist, &t, (GCompareFunc)_vconf_inoti_comp_with_wd);
 	if(noti_list == NULL) {
-		INFO("all noti for keyname(%s)/wd(%d) is removed", keyname, wd);
+		//INFO("all noti for keyname(%s)/wd(%d) is removed", keyname, wd);
 
 		r = inotify_rm_watch(_kdb_inoti_fd, wd);
 		if(r == -1) {

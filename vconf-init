@@ -8,4 +8,4 @@ set -e
 
 cp -a /opt/var/kdb/memory_init/memory/* /var/run/memory
 find /opt/var/kdb/memory_init/memory/ -type d -print0 | xargs -0 chsmack -t
-touch /tmp/vconf-initialized
+#touch /tmp/vconf-initialized

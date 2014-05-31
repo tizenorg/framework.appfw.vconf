@@ -1,0 +1,16 @@
+#!/bin/sh
+
+# Set vconf label to memory key directory
+
+/bin/mkdir /var/run/memory
+/bin/chmod 777 /var/run/memory
+/usr/bin/chsmack -a 'system::vconf' /var/run/memory
+/usr/bin/chsmack -t /var/run/memory
+
+# Copy initialized memory backend key
+/bin/cp /opt/var/kdb/memory_init/memory/* /var/run/memory -r -p --preserve=all
+
+/usr/bin/chsmack -a 'system::vconf' /opt/var/kdb/db
+/usr/bin/chsmack -t /opt/var/kdb/db
+
+/bin/touch /tmp/vconf-initialized

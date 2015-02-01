@@ -550,35 +550,56 @@ int main(int argc, char **argv)
 			}
 		}
 
-		if (make_file_path(argv[2], szFilePath)) {
+#ifdef COMBINE_FOLDER
+		char convert_key[1024+1] = {0,};
+		char *chrptr = NULL;
+
+		strncpy(convert_key, argv[2], 1024);
+
+		chrptr = strchr((const char*)convert_key, (int)'/');
+		if(!chrptr) {
+			fprintf(stderr, "Error!\t wrong key path\n");
+			return -1;
+		}
+		chrptr = strchr((const char*)chrptr+1, (int)'/');
+		while(chrptr) {
+			convert_key[chrptr-convert_key] = '+';
+			chrptr = strchr((const char*)chrptr+1, (int)'/');
+		}
+		psz_key = convert_key;
+#else
+		psz_key = argv[2];
+#endif
+
+		if (make_file_path(psz_key, szFilePath)) {
 			fprintf(stderr, "Error!\t Bad prefix\n");
 			return -1;
 		}
 
 		if (check_file_path_mode(szFilePath)) {
-			fprintf(stderr, "Error!\t create key %s\n", argv[2]);
+			fprintf(stderr, "Error!\t create key %s\n", psz_key);
 			return -1;
 		}
 
 		switch (set_type) {
 			case VCONFTOOL_TYPE_STRING:
-				vconf_set_str(argv[2], argv[3]);
+				vconf_set_str(psz_key, argv[3]);
 				break;
 			case VCONFTOOL_TYPE_INT:
-				vconf_set_int(argv[2], atoi(argv[3]));
+				vconf_set_int(psz_key, atoi(argv[3]));
 				break;
 			case VCONFTOOL_TYPE_DOUBLE:
-				vconf_set_dbl(argv[2], atof(argv[3]));
+				vconf_set_dbl(psz_key, atof(argv[3]));
 				break;
 			case VCONFTOOL_TYPE_BOOL:
-				vconf_set_bool(argv[2], !!atoi(argv[3]));
+				vconf_set_bool(psz_key, !!atoi(argv[3]));
 				break;
 			default:
 				fprintf(stderr, "never reach");
 				exit(1);
 		}
 
-		psz_key = argv[2];
+
 		/* Install memory backend key into flash space *******/
 		if (is_initialization) {
 			copy_memory_key(psz_key, szFilePath);
@@ -591,8 +612,13 @@ int main(int argc, char **argv)
 		else
 			print_help(argv[0]);
 	} else if (!strncmp(argv[1], "unset", 5)) {
-		if (argv[2])
-			vconf_unset(argv[2]);
+		if (argv[2]) {
+			if(is_recursive) {
+				vconf_unset_recursive(argv[2]);
+			} else {	
+				vconf_unset(argv[2]);
+			}
+		}
 		else
 			print_help(argv[0]);
 	} else
@@ -621,7 +647,9 @@ static void get_operation(char *input)
 				*(test + 1) = '\0';
 			else
 				*test = '\0';
-			vconf_get(get_keylist, input, VCONF_GET_KEY);
+			if(vconf_get(get_keylist, input, VCONF_GET_KEY)!=VCONF_OK) {
+				fprintf(stderr, "error in get vconf(%s) value\n", input);
+			}
 			temp_node = vconf_keylist_nextnode(get_keylist);
 		} else {
 			fprintf(stderr, "Include at least one slash\"/\"\n");
@@ -671,7 +699,7 @@ static void print_keylist(keylist_t *keylist, keynode_t *temp_node, int level)
 				get_num++;
 				break;
 			case VCONF_TYPE_DOUBLE:
-				printf("%s, value = %f (double)\n",
+				printf("%s, value = %.16lf (double)\n",
 				       vconf_keynode_get_name(temp_node),
 				       vconf_keynode_get_dbl(temp_node));
 				get_num++;

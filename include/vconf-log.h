@@ -44,6 +44,10 @@
 		do { \
 			syslog(LOG_ERR, "[%s:%d] "fmt"\n", __FILE__, __LINE__, ##arg); \
 		}while(0)
+	#define FATAL(fmt, arg...) \
+		do { \
+			syslog(LOG_ERR, "[%s:%d] "fmt"\n", __FILE__, __LINE__, ##arg); \
+		}while(0)
 	#define WARN(fmt, arg...) \
 		do { \
 			syslog(LOG_ERR, "[%s:%d] "fmt"\n", __FILE__, __LINE__, ##arg); \
@@ -54,8 +58,9 @@
 	#include <dlog.h>
 
 	#define INFO(fmt, arg...)
-	#define DBG(fmt, arg...) SECURE_SLOGD(fmt, ##arg)
+	#define DBG(fmt, arg...) SECURE_SLOGI(fmt, ##arg)
 	#define ERR(fmt, arg...) SECURE_SLOGE(fmt, ##arg)
+	#define FATAL(fmt, arg...) SECURE_SLOGF(fmt, ##arg)
 	#define WARN(fmt, arg...) SECURE_SLOGW(fmt, ##arg)
 
 #else
@@ -74,6 +79,10 @@
 			fprintf(stderr,"[%s:%d] "fmt"\n", __FILE__, __LINE__, ##arg); \
 		}while(0)
 	#define ERR(fmt, arg...) \
+		do { \
+			fprintf(stderr,"[%s:%d] "fmt"\n", __FILE__, __LINE__, ##arg); \
+		}while(0)
+	#define FATAL(fmt, arg...) \
 		do { \
 			fprintf(stderr,"[%s:%d] "fmt"\n", __FILE__, __LINE__, ##arg); \
 		}while(0)

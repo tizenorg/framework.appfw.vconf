@@ -2,7 +2,7 @@
 [Unit]
 Description=Initialize the VConf storage
 DefaultDependencies=no
-After=smack.service smack_pre_labeling_priv.service
+After=smack.service
 Before=basic.target
 
 [Service]

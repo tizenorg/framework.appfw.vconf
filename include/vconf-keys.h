@@ -42,6 +42,7 @@
 /**
  * @defgroup vconf_key_SystemManager System Manager Keys
  * @ingroup vconf_key
+ * @internal
  * @addtogroup vconf_key_SystemManager
  * @{
  * @brief Maintainer: giyeol.ok@samsung.com
@@ -100,6 +101,7 @@ enum {
 /**
  * @defgroup vconf_key_Wifi Wifi Keys
  * @ingroup vconf_key
+ * @internal
  * @addtogroup vconf_key_Wifi
  * @{
  * @brief Maintainer : dwmax.lee@samsung.com
@@ -138,6 +140,7 @@ enum {
 /**
  * @defgroup vconf_key_BT BT Keys
  * @ingroup vconf_key
+ * @internal
  * @addtogroup vconf_key_BT
  * @{
  * @brief Maintainer : chanyeol.park@samsung.com
@@ -220,6 +223,7 @@ enum {
 /**
  * @defgroup vconf_key_idleLock idleLock Keys
  * @ingroup vconf_key
+ * @internal
  * @addtogroup vconf_key_idleLock
  * @{
  * @brief Maintainer : seungtaek.chung@samsung.com, wonil22.choi@samsung.com hyoyoung.chang@samsung.com angelkim@samsung.com
@@ -258,6 +262,7 @@ enum {
 /**
  * @defgroup vconf_key_pwlock Lock application for password verification: phone, pin, sum, network, etc.
  * @ingroup vconf_key
+ * @internal
  * @addtogroup vconf_key_pwlock
  * @{
  * @brief Maintainer : seungtaek.chung@samsung.com miju52.lee@samsung.com
@@ -294,6 +299,7 @@ enum {
 /**
  * @defgroup vconf_key_browser browser public keys
  * @ingroup vconf_key
+ * @internal
  * @addtogroup vconf_key_browser
  * @{
  * @brief Maintainer : sangpyo7.kim@samsung.com ibchang@samsung.com

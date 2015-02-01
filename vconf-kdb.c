@@ -91,16 +91,16 @@ static GList* _vconf_copy_noti_list(GList *orig_notilist)
 	if (!orig_notilist)
 		return NULL;
 
-	while(orig_notilist) {
+	while (orig_notilist) {
 		do {
 			t = orig_notilist->data;
 
-			if(t == NULL) {
+			if (t == NULL) {
 				WARN("noti item data is null");
 				break;
 			}
 
-			if((t->keyname == NULL) || (strlen(t->keyname)==0)) {
+			if ((t->keyname == NULL) || (strlen(t->keyname) == 0)) {
 				WARN("noti item data key name is null");
 				break;
 			}
@@ -111,8 +111,14 @@ static GList* _vconf_copy_noti_list(GList *orig_notilist)
 				break;
 			}
 
-			n->wd = t->wd;
 			n->keyname = strndup(t->keyname, VCONF_KEY_PATH_LEN);
+			if (n->keyname == NULL)
+			{
+				ERR("The memory is insufficient, errno: %d (%s)", errno, strerror(errno));
+				free(n);
+				break;
+			}
+			n->wd = t->wd;
 			n->cb_data = t->cb_data;
 			n->cb = t->cb;
 
@@ -171,7 +177,7 @@ static gboolean _vconf_kdb_gio_cb(GIOChannel *src, GIOCondition cond, gpointer d
 						break;
 					}
 
-					if( (t) && (t->wd == ie.wd) ) {
+					if ( (t) && (t->wd == ie.wd) && (t->keyname) ) {
 						if ((ie.mask & IN_DELETE_SELF)) {
 							INFO("Notify that key(%s) is deleted", t->keyname);
 							_vconf_keynode_set_keyname(keynode, (const char *)t->keyname);
@@ -184,6 +190,9 @@ static gboolean _vconf_kdb_gio_cb(GIOChannel *src, GIOCondition cond, gpointer d
 							INFO("key(%s) is changed. cb(%p) called", t->keyname, t->cb);
 							t->cb(keynode, t->cb_data);
 						}
+					}
+					else if ( (t) && (t->keyname == NULL) ) { //for debugging
+						ERR("vconf keyname is null.");
 					}
 
 					_vconf_keynode_free(keynode);
@@ -301,7 +310,7 @@ _vconf_kdb_add_notify(const char *keyname, vconf_callback_fn cb, void *data)
 
 	list = g_list_find_custom(g_notilist, &t, (GCompareFunc)_vconf_inoti_comp_with_wd_cb);
 	if (list) {
-		//ERR("_vconf_kdb_add_notify : key(%s) has same callback(%p)", keyname, cb);
+		ERR("_vconf_kdb_add_notify : key(%s) has same callback(%p)", keyname, cb);
 		errno = EALREADY;
 		func_ret = VCONF_ERROR;
 		goto out_func;
@@ -315,13 +324,19 @@ _vconf_kdb_add_notify(const char *keyname, vconf_callback_fn cb, void *data)
 		goto out_func;
 	}
 
-	n->wd = wd;
 	n->keyname = strndup(keyname, VCONF_KEY_PATH_LEN);
+	if (n->keyname == NULL)
+	{
+		ERR("The memory is insufficient, errno: %d (%s)", errno, strerror(errno));
+		free(n);
+		goto out_func;
+	}
+	n->wd = wd;
 	n->cb_data = data;
 	n->cb = cb;
 
 	g_notilist = g_list_append(g_notilist, n);
-	if(!g_notilist) {
+	if (!g_notilist) {
 		ERR("g_list_append fail");
 	}
 

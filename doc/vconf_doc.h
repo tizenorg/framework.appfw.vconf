@@ -19,16 +19,17 @@
 #define __TIZEN_STORAGEFW_VCONF_DOC_H__
 
 /**
- * @defgroup StorageFW_VCONF_MODULE VCONF
- * @brief  A library for reading/writing Configuration Data.
+ * @internal
  * @ingroup StorageFW
+ * @defgroup StorageFW_VCONF_MODULE VCONF
+ * @brief  A library for reading/writing the Configuration Data.
  *
  * @section StorageFW_VCONF_MODULE_HEADER Required Header
  *   \#include <vconf.h>
  *
  * @section StorageFW_VCONF_MODULE_OVERVIEW Overview
  * - Convenient API
- * - Guarantee Transaction(db backend only)
+ * - Guarantee Transaction (db backend only)
  * - Apply Key-List concept
  * - Changeable Backend
  * - Simple Notification based on inotify

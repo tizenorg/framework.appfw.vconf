@@ -29,6 +29,7 @@
 #include <sys/stat.h>
 #include <sys/xattr.h>
 #include <ctype.h>
+#include <string.h>
 
 #ifndef API
 #define API __attribute__ ((visibility("default")))
@@ -610,14 +611,42 @@ int _vconf_get_key_prefix(const char *keyname, int *prefix)
 
 int _vconf_get_key_path(const char *keyname, char *path)
 {
-	if (strncmp(keyname, BACKEND_DB_PREFIX, sizeof(BACKEND_DB_PREFIX) - 1) == 0) {
-		snprintf(path, VCONF_KEY_PATH_LEN, "%s%s", BACKEND_SYSTEM_DIR, keyname);
-	} else if (0 == strncmp(keyname, BACKEND_FILE_PREFIX, sizeof(BACKEND_FILE_PREFIX) - 1)) {
-		snprintf(path, VCONF_KEY_PATH_LEN, "%s%s", BACKEND_SYSTEM_DIR, keyname);
-	} else if (0 == strncmp(keyname, BACKEND_MEMORY_PREFIX, sizeof(BACKEND_MEMORY_PREFIX) - 1)) {
-		snprintf(path, VCONF_KEY_PATH_LEN, "%s%s", BACKEND_MEMORY_DIR, keyname);
+	const char *key = NULL;
+
+	if(!keyname) {
+		ERR("keyname is null");
+		return VCONF_ERROR_WRONG_PREFIX;
+	}
+
+#ifdef COMBINE_FOLDER
+	char convert_key[VCONF_KEY_PATH_LEN+1] = {0,};
+	char *chrptr = NULL;
+
+	strncpy(convert_key, keyname, VCONF_KEY_PATH_LEN);
+
+	chrptr = strchr((const char*)convert_key, (int)'/');
+	if(!chrptr) {
+		ERR("wrong key path!");
+		return VCONF_ERROR_WRONG_PREFIX;
+	}
+	chrptr = strchr((const char*)chrptr+1, (int)'/');
+	while(chrptr) {
+		convert_key[chrptr-convert_key] = '+';
+		chrptr = strchr((const char*)chrptr+1, (int)'/');
+	}
+	key = (const char*)convert_key;
+#else
+	key = keyname;
+#endif
+
+	if (strncmp(key, BACKEND_DB_PREFIX, sizeof(BACKEND_DB_PREFIX) - 1) == 0) {
+		snprintf(path, VCONF_KEY_PATH_LEN, "%s%s", BACKEND_SYSTEM_DIR, key);
+	} else if (0 == strncmp(key, BACKEND_FILE_PREFIX, sizeof(BACKEND_FILE_PREFIX) - 1)) {
+		snprintf(path, VCONF_KEY_PATH_LEN, "%s%s", BACKEND_SYSTEM_DIR, key);
+	} else if (0 == strncmp(key, BACKEND_MEMORY_PREFIX, sizeof(BACKEND_MEMORY_PREFIX) - 1)) {
+		snprintf(path, VCONF_KEY_PATH_LEN, "%s%s", BACKEND_MEMORY_DIR, key);
 	} else {
-		ERR("Invalid argument: wrong prefix of key(%s)", keyname);
+		ERR("Invalid argument: wrong prefix of key(%s)", key);
 		return VCONF_ERROR_WRONG_PREFIX;
 	}
 
@@ -683,7 +712,7 @@ static int _vconf_set_key_creation(const char* path)
 	fd = open(path, O_RDWR|O_CREAT, S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP|S_IROTH);
 	umask(temp);
 	if(fd == -1) {
-		ERR("open(rdwr,create) error\n");
+		ERR("open(rdwr,create) error: %d, %s", errno, strerror(errno));
 		return VCONF_ERROR;
 	}
 	close(fd);
@@ -1258,7 +1287,6 @@ static int _vconf_set_key(keynode_t *keynode)
 	int is_busy_err = 0;
 	int retry = -1;
 	int prefix = 0;
-	int rc = 0;
 	int io_errno = 0;
 
 	ret = _vconf_get_key_prefix(keynode->keyname, &prefix);
@@ -1297,6 +1325,7 @@ static int _vconf_set_key(keynode_t *keynode)
 				case EFAULT :
 				case ENOENT :
 				{
+					int rc = 0;
 					char path[VCONF_KEY_PATH_LEN] = {0,};
 					rc = _vconf_get_key_path(keynode->keyname, path);
 					if(rc != VCONF_OK) {
@@ -1856,7 +1885,9 @@ static int _vconf_get_key_filesys(keynode_t *keynode, int prefix, int* io_errno)
 		case VCONF_TYPE_INT:
 		{
 			int value_int = 0;
-			if(!fread((void*)&value_int, sizeof(int), 1, fp)) {
+			int read_size = 0;
+			read_size = fread((void*)&value_int, sizeof(int), 1, fp);
+			if((read_size <= 0) || (read_size > sizeof(int))) {
 				if(ferror(fp)) {
 					err_no = errno;
 				} else {
@@ -1873,7 +1904,9 @@ static int _vconf_get_key_filesys(keynode_t *keynode, int prefix, int* io_errno)
 		case VCONF_TYPE_DOUBLE:
 		{
 			double value_dbl = 0;
-			if(!fread((void*)&value_dbl, sizeof(double), 1, fp)) {
+			int read_size = 0;
+			read_size = fread((void*)&value_dbl, sizeof(double), 1, fp);
+			if((read_size <= 0) || (read_size > sizeof(double))) {
 				if(ferror(fp)) {
 					err_no = errno;
 				} else {
@@ -1890,7 +1923,9 @@ static int _vconf_get_key_filesys(keynode_t *keynode, int prefix, int* io_errno)
 		case VCONF_TYPE_BOOL:
 		{
 			int value_int = 0;
-			if(!fread((void*)&value_int, sizeof(int), 1, fp)) {
+			int read_size = 0;
+			read_size = fread((void*)&value_int, sizeof(int), 1, fp);
+			if((read_size <= 0) || (read_size > sizeof(int))) {
 				if(ferror(fp)) {
 					err_no = errno;
 				} else {
@@ -2223,10 +2258,18 @@ API int vconf_get(keylist_t *keylist, const char *dirpath, get_option_t option)
 				func_ret = VCONF_ERROR;
 				goto out_unlock;
 			}
-
+#ifdef COMBINE_FOLDER
+			if('/' == *(dirpath+(strlen(dirpath)-1))) {
+				snprintf(file_path, VCONF_KEY_PATH_LEN, "%s%s", dirpath, entry.d_name);
+				snprintf(full_file_path, VCONF_KEY_PATH_LEN, "%s%s", full_path, entry.d_name);
+			} else {
+				snprintf(file_path, VCONF_KEY_PATH_LEN, "%s/%s", dirpath, entry.d_name);
+				snprintf(full_file_path, VCONF_KEY_PATH_LEN, "%s/%s", full_path, entry.d_name);
+			}
+#else
 			snprintf(file_path, VCONF_KEY_PATH_LEN, "%s/%s", dirpath, entry.d_name);
 			snprintf(full_file_path, VCONF_KEY_PATH_LEN, "%s/%s", full_path, entry.d_name);
-
+#endif
 			rc = _vconf_path_is_dir(full_file_path);
 			if(rc != VCONF_ERROR) {
 				if(rc == 1) {
@@ -2339,8 +2382,9 @@ API int vconf_get_int(const char *in_key, int *intval)
 		if(pKeyNode->type == VCONF_TYPE_INT) {
 			INFO("%s(%d) success", in_key, *intval);
 			func_ret = VCONF_OK;
-		} else
+		} else {
 			ERR("The type(%d) of keynode(%s) is not INT", pKeyNode->type, pKeyNode->keyname);
+		}
 	}
 
 	_vconf_keynode_free(pKeyNode);
@@ -2376,8 +2420,9 @@ API int vconf_get_bool(const char *in_key, int *boolval)
 		if(pKeyNode->type == VCONF_TYPE_BOOL) {
 			INFO("%s(%d) success", in_key, *boolval);
 			func_ret = VCONF_OK;
-		} else
+		} else {
 			ERR("The type(%d) of keynode(%s) is not BOOL", pKeyNode->type, pKeyNode->keyname);
+		}
 	}
 
 	_vconf_keynode_free(pKeyNode);
@@ -2450,6 +2495,7 @@ API char *vconf_get_str(const char *in_key)
 		if(pKeyNode->type == VCONF_TYPE_STRING)
 			tempstr = pKeyNode->value.s;
 		else
+			//FATAL("The type(%d) of keynode(%s) is not STR", pKeyNode->type, pKeyNode->keyname);
 			ERR("The type(%d) of keynode(%s) is not STR", pKeyNode->type, pKeyNode->keyname);
 
 		if(tempstr) {
@@ -2527,8 +2573,31 @@ API int vconf_unset_recursive(const char *in_dir)
 
 	retvm_if(in_dir == NULL, VCONF_ERROR, "Invalid argument: dir path is null");
 
+#ifdef COMBINE_FOLDER
+	if (strncmp(in_dir, BACKEND_DB_PREFIX, sizeof(BACKEND_DB_PREFIX) - 1) == 0) {
+		snprintf(dirpath, VCONF_KEY_PATH_LEN, "%sdb", BACKEND_SYSTEM_DIR);
+	} else if (0 == strncmp(in_dir, BACKEND_FILE_PREFIX, sizeof(BACKEND_FILE_PREFIX) - 1)) {
+		snprintf(dirpath, VCONF_KEY_PATH_LEN, "%sfile", BACKEND_SYSTEM_DIR);
+	} else if (0 == strncmp(in_dir, BACKEND_MEMORY_PREFIX, sizeof(BACKEND_MEMORY_PREFIX) - 1)) {
+		snprintf(dirpath, VCONF_KEY_PATH_LEN, "%smemory", BACKEND_MEMORY_DIR);
+	} else {
+		ERR("Invalid argument: wrong prefix of key(%s)", in_dir);
+		return VCONF_ERROR;
+	}
+
+	char key_name[VCONF_KEY_PATH_LEN] = {0,};
+	const char* split_key = strchr((const char*)in_dir, (int)'/');
+	snprintf(key_name, VCONF_KEY_PATH_LEN, "%s", split_key+1);
+
+	if(key_name[strlen(key_name)-1] == '/') {
+		key_name[strlen(key_name)-1] = '+';
+	} else {
+		key_name[strlen(key_name)] = '+';
+	}
+#else
 	ret = _vconf_get_key_path(in_dir, dirpath);
 	retvm_if(ret != VCONF_OK, VCONF_ERROR, "Invalid argument: key is not valid");
+#endif
 
 	if((dir=opendir(dirpath)) == NULL) {
 		strerror_r(errno, err_buf, ERR_LEN);
@@ -2547,6 +2616,12 @@ API int vconf_unset_recursive(const char *in_dir)
 		if(( strcmp( entry.d_name, ".") == 0 ) || ( strcmp( entry.d_name, "..") == 0 )) {
 	            goto NEXT;
 		}
+
+#ifdef COMBINE_FOLDER
+		if(!strstr(entry.d_name, key_name)) {
+				goto NEXT;
+		}
+#endif
 
 		snprintf(fullpath,VCONF_KEY_PATH_LEN, "%s/%s", dirpath, entry.d_name);
 

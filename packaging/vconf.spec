@@ -1,6 +1,6 @@
 Name:       vconf
 Summary:    Configuration system library
-Version:    0.2.76
+Version:    0.2.83
 Release:    1
 Group:      System/Libraries
 License:    Apache License, Version 2.0
@@ -43,13 +43,12 @@ Vconf key management header files
 %setup -q -n %{name}-%{version}
 
 %build
-%if 0%{?tizen_build_binary_release_type_eng}
-export CFLAGS="$CFLAGS -DTIZEN_ENGINEER_MODE"
-export CXXFLAGS="$CXXFLAGS -DTIZEN_ENGINEER_MODE"
-export FFLAGS="$FFLAGS -DTIZEN_ENGINEER_MODE"
-%endif
+export CFLAGS="$CFLAGS -DTIZEN_DEBUG_ENABLE"
+export CXXFLAGS="$CXXFLAGS -DTIZEN_DEBUG_ENABLE"
+export FFLAGS="$FFLAGS -DTIZEN_DEBUG_ENABLE"
 export CFLAGS="$CFLAGS -Wall -Werror"
 export CFLAGS="$CFLAGS -Wno-unused-function -Wno-unused-but-set-variable"
+
 cmake . -DCMAKE_INSTALL_PREFIX=%{_prefix}
 
 make %{?jobs:-j%jobs}
@@ -60,6 +59,8 @@ rm -rf %{buildroot}
 
 mkdir -p %{buildroot}/opt/var/kdb/db
 mkdir -p %{buildroot}/opt/var/kdb/db/.backup
+mkdir -p %{buildroot}/opt/var/kdb/file
+mkdir -p %{buildroot}/opt/var/kdb/file/.backup
 mkdir -p %{buildroot}/tmp
 #touch %{buildroot}/opt/var/kdb/.vconf_lock
 mkdir -p %{buildroot}%{_libdir}/systemd/system/basic.target.wants
@@ -87,6 +88,8 @@ systemctl daemon-reload
 %{_libdir}/*.so.*
 %dir %attr(777,root,root) /opt/var/kdb/db
 %dir %attr(777,root,root) /opt/var/kdb/db/.backup
+%dir %attr(777,root,root) /opt/var/kdb/file
+%dir %attr(777,root,root) /opt/var/kdb/file/.backup
 #/opt/var/kdb/.vconf_lock
 %{_libdir}/systemd/system/basic.target.wants/vconf-setup.service
 %{_libdir}/systemd/system/vconf-setup.service
@@ -105,8 +108,14 @@ systemctl daemon-reload
 %defattr(-,root,root,-)
 %{_includedir}/vconf/vconf-keys.h
 
-
 %changelog
+* Wed Jun 25 2014 - Hyungdeuk Kim <hd3.kim@samsung.com>
+- Fix vconf unset recursive error under COMBINE FOLDER define
+- Make folder & change attr folder for file key
+
+* Wed Mar 19 2014 - Hyungdeuk Kim <hd3.kim@samsung.com>
+- Add ag connected value for VCONFKEY_BT_DEVICE key
+
 * Wed Feb 05 2014 - Hyungdeuk Kim <hd3.kim@samsung.com>
 - Directory smack label set time is changed (from first boot to creation time)
 

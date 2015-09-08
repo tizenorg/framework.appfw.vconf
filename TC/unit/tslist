@@ -31,3 +31,4 @@
 /unit/utc_ApplicationFW_vconf_sync_key_func
 /unit/utc_ApplicationFW_vconf_ignore_key_changed_func
 /unit/utc_ApplicationFW_vconf_notify_key_changed_func
+/unit/utc_ApplicationFW_vconf_get_ext_errno_func

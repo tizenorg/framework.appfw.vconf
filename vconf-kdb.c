@@ -42,15 +42,15 @@ struct noti_node {
 	void *cb_data;
 	struct noti_node *next;
 };
-typedef struct noti_node notilist;
+typedef struct noti_node noti_node_s;
 static GList *g_notilist;
 
 static int _vconf_inoti_comp_with_wd(gconstpointer a, gconstpointer b)
 {
 	int r;
 
-	notilist *key1 = (notilist *) a;
-	notilist *key2 = (notilist *) b;
+	noti_node_s *key1 = (noti_node_s *) a;
+	noti_node_s *key2 = (noti_node_s *) b;
 
 	r = key1->wd - key2->wd;
 	return r;
@@ -60,8 +60,8 @@ static int _vconf_inoti_comp_with_wd_cb(gconstpointer a, gconstpointer b)
 {
 	int r;
 
-	notilist *key1 = (notilist *) a;
-	notilist *key2 = (notilist *) b;
+	noti_node_s *key1 = (noti_node_s *) a;
+	noti_node_s *key2 = (noti_node_s *) b;
 
 	r = key1->wd - key2->wd;
 	if (r != 0)
@@ -78,61 +78,134 @@ static pthread_mutex_t _kdb_g_ns_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 static GSource *_kdb_handler;
 
+static GList* _vconf_copy_noti_list(GList *orig_notilist)
+{
+	GList *copy_notilist = NULL;
+	struct noti_node *n = NULL;
+	struct noti_node *t = NULL;
+
+	if (!orig_notilist)
+		return NULL;
+
+	orig_notilist = g_list_first(orig_notilist);
+	if (!orig_notilist)
+		return NULL;
+
+	while (orig_notilist) {
+		do {
+			t = orig_notilist->data;
+
+			if (t == NULL) {
+				WARN("noti item data is null");
+				break;
+			}
+
+			if ((t->keyname == NULL) || (strlen(t->keyname) == 0)) {
+				WARN("noti item data key name is null");
+				break;
+			}
+
+			n = calloc(1, sizeof(noti_node_s));
+			if (n == NULL) {
+				ERR("_vconf_copy_noti_list : calloc failed. memory full");
+				break;
+			}
+
+			n->keyname = strndup(t->keyname, VCONF_KEY_PATH_LEN);
+			if (n->keyname == NULL)
+			{
+				ERR("The memory is insufficient, errno: %d (%s)", errno, strerror(errno));
+				free(n);
+				break;
+			}
+			n->wd = t->wd;
+			n->cb_data = t->cb_data;
+			n->cb = t->cb;
+
+			copy_notilist = g_list_append(copy_notilist, n);
+		} while (0);
+
+		orig_notilist = g_list_next(orig_notilist);
+	}
+	return copy_notilist;
+}
+
+static void _vconf_free_noti_node(gpointer data)
+{
+	struct noti_node *n = (struct noti_node*)data;
+	g_free(n->keyname);
+	g_free(n);
+}
+
+static void _vconf_free_noti_list(GList *noti_list)
+{
+	g_list_free_full(noti_list, _vconf_free_noti_node);
+}
+
+
 static gboolean _vconf_kdb_gio_cb(GIOChannel *src, GIOCondition cond, gpointer data)
 {
 	int fd, r;
 	struct inotify_event ie;
-
-	INFO("vconf noti function");
+	GList *l_notilist = NULL;
 
 	fd = g_io_channel_unix_get_fd(src);
 	r = read(fd, &ie, sizeof(ie));
 
 	while (r > 0) {
-		INFO("read event from GIOChannel. pid : %d", getpid());
+		if (ie.mask & INOTY_EVENT_MASK) {
 
-		if (g_notilist) {
+			INFO("read event from GIOChannel. wd : %d", ie.wd);
 
-			struct noti_node *t = NULL;
-			GList *noti_list = NULL;
-			keynode_t* keynode = NULL;
+			pthread_mutex_lock(&_kdb_g_ns_mutex);
+			l_notilist = _vconf_copy_noti_list(g_notilist);
+			pthread_mutex_unlock(&_kdb_g_ns_mutex);
 
-			retvm_if(!(ie.mask & INOTY_EVENT_MASK), TRUE,
-				"Invalid argument: ie.mask(%d), ie.len(%d)",
-				 ie.mask, ie.len);
+			if (l_notilist) {
 
-			/* pthread_mutex_lock(&_kdb_g_ns_mutex); */
+				struct noti_node *t = NULL;
+				GList *noti_list = NULL;
 
-			noti_list = g_list_first(g_notilist);
+				noti_list = g_list_first(l_notilist);
 
-			while (noti_list) {
-				t = noti_list->data;
+				while (noti_list) {
+					t = noti_list->data;
 
-				keynode_t* keynode = _vconf_keynode_new();
-				retvm_if(keynode == NULL, TRUE, "key malloc fail");
-
-				if( (t) && (t->wd == ie.wd) ) {
-					if ((ie.mask & IN_DELETE_SELF)) {
-						INFO("Notify that key(%s) is deleted", t->keyname);
-						_vconf_keynode_set_keyname(keynode, (const char *)t->keyname);
-						_vconf_keynode_set_null(keynode);
-						t->cb(keynode, t->cb_data);
-						_vconf_kdb_del_notify(t->keyname, t->cb);
-					} else {
-						_vconf_keynode_set_keyname(keynode, t->keyname);
-						_vconf_get_key(keynode);
-						t->cb(keynode, t->cb_data);
+					keynode_t* keynode = _vconf_keynode_new();
+					if (keynode == NULL) {
+						ERR("key malloc fail");
+						break;
 					}
+
+					if ( (t) && (t->wd == ie.wd) && (t->keyname) ) {
+						if ((ie.mask & IN_DELETE_SELF)) {
+							INFO("Notify that key(%s) is deleted", t->keyname);
+							_vconf_keynode_set_keyname(keynode, (const char *)t->keyname);
+							_vconf_keynode_set_null(keynode);
+							t->cb(keynode, t->cb_data);
+							_vconf_kdb_del_notify(t->keyname, t->cb);
+						} else {
+							_vconf_keynode_set_keyname(keynode, t->keyname);
+							_vconf_get_key(keynode);
+							INFO("key(%s) is changed. cb(%p) called", t->keyname, t->cb);
+							t->cb(keynode, t->cb_data);
+						}
+					}
+					else if ( (t) && (t->keyname == NULL) ) { //for debugging
+						ERR("vconf keyname is null.");
+					}
+
+					_vconf_keynode_free(keynode);
+
+					noti_list = g_list_next(noti_list);
 				}
 
-				_vconf_keynode_free(keynode);
-
-				noti_list = g_list_next(noti_list);
+				_vconf_free_noti_list(l_notilist);
 			}
 		}
 
 		if (ie.len > 0)
-			lseek(fd, ie.len, SEEK_CUR);
+			(void) lseek(fd, ie.len, SEEK_CUR);
 
 		r = read(fd, &ie, sizeof(ie));
 	}
@@ -142,11 +215,15 @@ static gboolean _vconf_kdb_gio_cb(GIOChannel *src, GIOCondition cond, gpointer d
 static int _vconf_kdb_noti_init(void)
 {
 	GIOChannel *gio;
+	int ret = 0;
 
 	pthread_mutex_lock(&_kdb_inoti_fd_mutex);
 
-	retm_if(0 < _kdb_inoti_fd, "Error : invalid _kdb_inoti_fd");
-
+	if (0 < _kdb_inoti_fd) {
+		ERR("Error: invalid _kdb_inoti_fd");
+		pthread_mutex_unlock(&_kdb_inoti_fd_mutex);
+		return VCONF_ERROR;
+	}
 	_kdb_inoti_fd = inotify_init();
 	if (_kdb_inoti_fd == -1) {
 		char err_buf[100] = { 0, };
@@ -156,8 +233,23 @@ static int _vconf_kdb_noti_init(void)
 		return VCONF_ERROR;
 	}
 
-	fcntl(_kdb_inoti_fd, F_SETFD, FD_CLOEXEC);
-	fcntl(_kdb_inoti_fd, F_SETFL, O_NONBLOCK);
+	ret = fcntl(_kdb_inoti_fd, F_SETFD, FD_CLOEXEC);
+	if (ret < 0) {
+		char err_buf[100] = { 0, };
+		strerror_r(errno, err_buf, sizeof(err_buf));
+		ERR("inotify init: %s", err_buf);
+		pthread_mutex_unlock(&_kdb_inoti_fd_mutex);
+		return VCONF_ERROR;
+	}
+
+	ret = fcntl(_kdb_inoti_fd, F_SETFL, O_NONBLOCK);
+	if (ret < 0) {
+		char err_buf[100] = { 0, };
+		strerror_r(errno, err_buf, sizeof(err_buf));
+		ERR("inotify init: %s", err_buf);
+		pthread_mutex_unlock(&_kdb_inoti_fd_mutex);
+		return VCONF_ERROR;
+	}
 
 	pthread_mutex_unlock(&_kdb_inoti_fd_mutex);
 
@@ -178,8 +270,8 @@ static int _vconf_kdb_noti_init(void)
 int
 _vconf_kdb_add_notify(const char *keyname, vconf_callback_fn cb, void *data)
 {
-	char path[KEY_PATH];
-	int wd, r;
+	char path[VCONF_KEY_PATH_LEN];
+	int wd;
 	struct noti_node t, *n;
 	char err_buf[ERR_LEN] = { 0, };
 	int ret = 0;
@@ -187,8 +279,8 @@ _vconf_kdb_add_notify(const char *keyname, vconf_callback_fn cb, void *data)
 	int func_ret = VCONF_OK;
 
 	retvm_if((keyname == NULL || cb == NULL), VCONF_ERROR,
-		"_vconf_kdb_add_notify : Invalid argument - keyname(%s) cb(%p)",
-		 keyname, cb);
+			"_vconf_kdb_add_notify : Invalid argument - keyname(%s) cb(%p)",
+			keyname, cb);
 
 	if (_kdb_inoti_fd <= 0)
 		if (_vconf_kdb_noti_init())
@@ -224,7 +316,7 @@ _vconf_kdb_add_notify(const char *keyname, vconf_callback_fn cb, void *data)
 		goto out_func;
 	}
 
-	n = calloc(1, sizeof(notilist));
+	n = calloc(1, sizeof(noti_node_s));
 	if (n == NULL) {
 		strerror_r(errno, err_buf, sizeof(err_buf));
 		ERR("_vconf_kdb_add_notify : add noti(%s)", err_buf);
@@ -232,13 +324,19 @@ _vconf_kdb_add_notify(const char *keyname, vconf_callback_fn cb, void *data)
 		goto out_func;
 	}
 
+	n->keyname = strndup(keyname, VCONF_KEY_PATH_LEN);
+	if (n->keyname == NULL)
+	{
+		ERR("The memory is insufficient, errno: %d (%s)", errno, strerror(errno));
+		free(n);
+		goto out_func;
+	}
 	n->wd = wd;
-	n->keyname = strndup(keyname, BUF_LEN);
 	n->cb_data = data;
 	n->cb = cb;
 
 	g_notilist = g_list_append(g_notilist, n);
-	if(!g_notilist) {
+	if (!g_notilist) {
 		ERR("g_list_append fail");
 	}
 
@@ -250,17 +348,16 @@ out_func:
 	return func_ret;
 }
 
-int
+	int
 _vconf_kdb_del_notify(const char *keyname, vconf_callback_fn cb)
 {
 	int wd = 0;
 	int r = 0;
 	struct noti_node *n = NULL;
 	struct noti_node t;
-	char path[KEY_PATH] = { 0, };
+	char path[VCONF_KEY_PATH_LEN] = { 0, };
 	char err_buf[ERR_LEN] = { 0, };
 	int del = 0;
-	int remain = 0;
 	int ret = 0;
 	int func_ret = VCONF_OK;
 	GList *noti_list;
@@ -294,7 +391,7 @@ _vconf_kdb_del_notify(const char *keyname, vconf_callback_fn cb)
 		g_free(n);
 
 		INFO("key(%s) cb is removed. remained noti list total length(%d)",
-			keyname, g_list_length(g_notilist));
+				keyname, g_list_length(g_notilist));
 	}
 
 	noti_list = NULL;
@@ -326,7 +423,6 @@ _vconf_kdb_del_notify(const char *keyname, vconf_callback_fn cb)
 	pthread_mutex_unlock(&_kdb_g_ns_mutex);
 
 	if(del == 0) {
-		ERR("Error: nothing deleted");
 		errno = ENOENT;
 		func_ret = VCONF_ERROR;
 	}

@@ -1,0 +1,14 @@
+
+[Unit]
+Description=Initialize the VConf storage
+DefaultDependencies=no
+After=smack.service
+Before=basic.target
+
+[Service]
+Type=oneshot
+ExecStart=/etc/rc.d/init.d/vconf-init
+
+[Install]
+WantedBy=basic.target
+

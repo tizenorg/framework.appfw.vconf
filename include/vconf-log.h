@@ -36,7 +36,15 @@
 		do { \
 			syslog(LOG_INFO, "[%s:%d] "fmt"\n", __FILE__, __LINE__, ##arg); \
 		}while(0)
+	#define DBG(fmt, arg...) \
+		do { \
+			syslog(LOG_INFO, "[%s:%d] "fmt"\n", __FILE__, __LINE__, ##arg); \
+		}while(0)
 	#define ERR(fmt, arg...) \
+		do { \
+			syslog(LOG_ERR, "[%s:%d] "fmt"\n", __FILE__, __LINE__, ##arg); \
+		}while(0)
+	#define FATAL(fmt, arg...) \
 		do { \
 			syslog(LOG_ERR, "[%s:%d] "fmt"\n", __FILE__, __LINE__, ##arg); \
 		}while(0)
@@ -49,9 +57,11 @@
 	#define LOG_TAG	"VCONF"
 	#include <dlog.h>
 
-	#define INFO(fmt, arg...) SLOGI(fmt, ##arg)
-	#define ERR(fmt, arg...) SLOGE(fmt, ##arg)
-	#define WARN(fmt, arg...) SLOGW(fmt, ##arg
+	#define INFO(fmt, arg...)
+	#define DBG(fmt, arg...) SECURE_SLOGI(fmt, ##arg)
+	#define ERR(fmt, arg...) SECURE_SLOGE(fmt, ##arg)
+	#define FATAL(fmt, arg...) SECURE_SLOGF(fmt, ##arg)
+	#define WARN(fmt, arg...) SECURE_SLOGW(fmt, ##arg)
 
 #else
 	#include <stdlib.h>
@@ -60,11 +70,19 @@
 		do { \
 			fprintf(stdout,"[%s:%d] "fmt"\n", __FILE__, __LINE__, ##arg); \
 		}while(0)
+	#define DBG(fmt, arg...) \
+		do { \
+			fprintf(stdout,"[%s:%d] "fmt"\n", __FILE__, __LINE__, ##arg); \
+		}while(0)
 	#define WARN(fmt, arg...) \
 		do { \
 			fprintf(stderr,"[%s:%d] "fmt"\n", __FILE__, __LINE__, ##arg); \
 		}while(0)
 	#define ERR(fmt, arg...) \
+		do { \
+			fprintf(stderr,"[%s:%d] "fmt"\n", __FILE__, __LINE__, ##arg); \
+		}while(0)
+	#define FATAL(fmt, arg...) \
 		do { \
 			fprintf(stderr,"[%s:%d] "fmt"\n", __FILE__, __LINE__, ##arg); \
 		}while(0)

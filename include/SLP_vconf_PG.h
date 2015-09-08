@@ -20,37 +20,63 @@
  */
 
 /**
- *  @ingroup SLP_PG
- *  @defgroup VCONF_PG VConf
+ *  @ingroup StorageFW
+ *  @defgroup StorageFW_VCONF_MODULE VCONF
  *  @{
 
  <h1 class="pg">Introduction</h1>
- VConf is a virtual configuration system which provides three kinds of backend and notification. Internally, VConf uses a modified Elektra 0.7 and inotify of kernel.
+	<p> VCONF is a virtual configuration system which provides three alternative back-ends for text configuration files and notification.
+		It internally uses a modified Elektra 0.7 and Inotifiy system for implementation. </p>
 
- @image html SLP_Vconf_PG_image01.png
+<h1 class="pg">Features</h1>
+	<ul>
+		<li> It provides the key value pair mechanism for system configuration data. </li>
+		<li> It supports multiple data types (bool, int, double and string) for configuration data.</li>
+		<li>It supports key value changed notification.</li>
+		<li> <ol> It provides three type of backends
+			<li> DB</li>
+			<li> FILe</li>
+			<li> Memory</li>
+		</ol></li>
+		<li>It provides the option to select the backend to store the configuration data.</li>
+
+	</ul>
+
+<h1 class="pg">VCONF Logical View diagram</h1>
+\image html SLP_VCONF_PG_images_logical_view.png "Picture 1. Logical view"
+
+<h1 class="pg"> vconf functional diagram </h1>
+ \image html SLP_Vconf_PG_image01.png "Picture 2.Functional view"
 
  <h2 class="pg">Properties</h2>
-- Convenient API (read/write common data type : integer, double, boolean, string)
-- Guarantee Transaction(db backend)
-- Apply Key-List concept
-- Changeable Backend (db, file, memory)
-- Simple Notification based Inotify
-- Header File : vconf.h 
+	<ul>
+		<li> Convenient API (read/write common data type : integer, double, boolean, string) </li>
+		<li> Guarantee Transaction(db backend) </li>
+		<li> Apply Key-List concept </li>
+		<li> Changeable Backend (db, file, memory) </li>
+		<li> Simple Notification based Inotify </li>
+	</ul>
 
 <h1 class="pg">Programming Guide</h1>
 
-<h2 class="pg">Backends</h1>
-VConf has 3 kinds of backend.
+<h2 class="pg"> Header file </h1>
+<strong>header file name : vconf.h </strong>
 
-<h3 class="pg">1.	db backend</h1>
-We can use this backend by specifying the "db" prefix. <br>
-E.g. db/test_app/key1 <br>
-A key starting with ¡°db¡± is saved at a location which is mounted by libsqlfs. Therefore the key has characteristics of a database.(robustness, atomicity). But it is slower than the other backends. <br>
-Developers can use this backend in order to synchronize immediately. <br>
+<h2 class="pg">Backends</h1>
+	<p> VConf has 3 kinds of backend.</p>
+	<ol>
+		<li>db backend</li>
+			<p> We can use this backend by specifying the "db" prefix. E.g. db/test_app/key1 </p></br>
+
+			<p> A key starting with db is saved at a location which is mounted by libsqlfs.
+				Therefore the key has characteristics of a database.(robustness, atomicity).
+				But it is slower than the other backends. </p><br/>
+
+			<p> Developers can use this backend in order to synchronize immediately. </p><br/>
 
 @code
 #include <stdio.h>
-#include <vconf.h> 
+#include <vconf.h>
 
 const char *key1_name="db/test/key1";
 
@@ -72,11 +98,14 @@ int main(int argc, char **argv)
 }
 @endcode
 
-<h3 class="pg">2.	memory backend</h1>
-We can use this backend by specifying the "memory" prefix. <br>
-E.g. memory/test_app/key1 <br>
-A key starting with ¡°memory¡± is saved at a location which is mounted by tmpfs. Therefore the key has characteristics of memory. It has the highest speed. But if the target is turned off, the key is removed (volatile). <br>
-Developers can use this backend for keys such as the power state of phone. <br>
+	<li> memory backend</li>
+	<p> We can use this backend by specifying the "memory" prefix. E.g. memory/test_app/key1</p> <br>
+
+	<p> A key starting with memory is saved at a location which is mounted by tmpfs.
+		Therefore the key has characteristics of memory. It has the highest speed.
+		But if the target is turned off, the key is removed (volatile). </p><br>
+
+	<p> Developers can use this backend for keys such as the power state of phone.</p> <br/>
 
 @code
 #include <stdio.h>
@@ -102,15 +131,18 @@ Developers can use this backend for keys such as the power state of phone. <br>
  }
 @endcode
 
-<h3 class="pg">3.	File backend</h1>
-We can use this backend by specifying the "file" prefix. <br>
-E.g. file/test_app/key1 <br>
-A key starting with ¡°file¡± is saved at a location which is mounted by basic file system. Therefore the key has characteristics of file. If the target is turned off without synchronising, the key can lose data. <br>
-Developers can use this backend for keys such as the sync state of something, where it is not vitally important for the key to hold the correct data. <br>
+	<li>File backend</li>
+		<p>	We can use this backend by specifying the "file" prefix.E.g. file/test_app/key1 </p><br/>
+
+		<p>	A key starting with file is saved at a location which is mounted by basic file system.
+		Therefore the key has characteristics of file. If the target is turned off without synchronising, the key can lose data. </p><br/>
+
+		<p>	Developers can use this backend for keys such as the sync state of something,
+		where it is not vitally important for the key to hold the correct data. </p><br/>
 
 @code
 #include <stdio.h>
-#include <vconf.h> 
+#include <vconf.h>
 
 const char *key1_name="file/test/key1";
 
@@ -135,8 +167,9 @@ int main(int argc, char **argv)
 @endcode
 
 <h2 class="pg">Notification</h1>
-The notification of a changed key is handled in the g_main_loop of the default context. If you want to receive a notification, you should use g_main_loop of the default context. <br>
-For g_main_loop, refer to glib manual. <br>
+	<p>	The notification of a changed key is handled in the g_main_loop of the default context.
+	If you want to receive a notification, you should use g_main_loop of the default context.
+	For g_main_loop, refer to glib manual. </p><br/>
 
 @code
 #include <stdio.h>

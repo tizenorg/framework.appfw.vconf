@@ -1,0 +1,6 @@
+cmake-tmp
+.*.swp
+*-stamp
+debian/*.install
+debian/*.*inst
+debian/tmp

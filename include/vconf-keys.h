@@ -42,9 +42,10 @@
 /**
  * @defgroup vconf_key_SystemManager System Manager Keys
  * @ingroup vconf_key
+ * @internal
  * @addtogroup vconf_key_SystemManager
  * @{
- * @brief Maintainer : jinkun.jang@samsung.com
+ * @brief Maintainer: giyeol.ok@samsung.com
  */
 
 /**
@@ -52,13 +53,13 @@
  *
  * 0 : Remove \n
  * 1 : Add \n
- * 3 : Over current \n
+ * 2 : Over current \n
  */
 #define VCONFKEY_SYSMAN_USB_HOST_STATUS             "memory/sysman/usbhost_status"
 enum {
-	VCONFKEY_SYSMEN_USB_HOST_DISCONNECTED = 0,
-	VCONFKEY_SYSMEN_USB_HOST_CONNECTED,
-	VCONFKEY_SYSMEN_USB_HOST_CHANGED
+	VCONFKEY_SYSMAN_USB_HOST_DISCONNECTED = 0,
+	VCONFKEY_SYSMAN_USB_HOST_CONNECTED,
+	VCONFKEY_SYSMAN_USB_HOST_OVERCURRENT
 };
 
 /**
@@ -100,6 +101,7 @@ enum {
 /**
  * @defgroup vconf_key_Wifi Wifi Keys
  * @ingroup vconf_key
+ * @internal
  * @addtogroup vconf_key_Wifi
  * @{
  * @brief Maintainer : dwmax.lee@samsung.com
@@ -138,6 +140,7 @@ enum {
 /**
  * @defgroup vconf_key_BT BT Keys
  * @ingroup vconf_key
+ * @internal
  * @addtogroup vconf_key_BT
  * @{
  * @brief Maintainer : chanyeol.park@samsung.com
@@ -167,23 +170,37 @@ enum {
  * @brief Bluetooth Connected status
  *
  * 0x0000 : Not connected \n
- * 0x0004 : Headset connected \n
- * 0x0010 : A2DP headset connected \n
- * 0x0020 : SAP connected \n
- * 0x0040 : PBAP connected \n
+ * 0x0001 : Headset connected \n
+ * 0x0002 : A2DP headset connected \n
+ * 0x0004 : HID connected \n
+ * 0x0008 : PAN connected \n
+ * 0x0010 : SAP connected \n
+ * 0x0020 : PBAP connected \n
+ * 0x0040 : HID keyboard connected \n
+ * 0x0080 : HID mouse connected \n
+ * 0x1000 : AG connected \n
 */
 #define VCONFKEY_BT_DEVICE                          "memory/bluetooth/device"
 enum {
 	/** Not connected */
 	VCONFKEY_BT_DEVICE_NONE = 0x0000,
 	/** Headset connected */
-	VCONFKEY_BT_DEVICE_HEADSET_CONNECTED = 0x0004,
+	VCONFKEY_BT_DEVICE_HEADSET_CONNECTED = 0x0001,
 	/** A2DP headset connected */
-	VCONFKEY_BT_DEVICE_A2DP_HEADSET_CONNECTED = 0x0010,
+	VCONFKEY_BT_DEVICE_A2DP_HEADSET_CONNECTED = 0x0002,
+	/** HID connected */
+	VCONFKEY_BT_DEVICE_HID_CONNECTED = 0x0004,
+	/** PAN connected */
+	VCONFKEY_BT_DEVICE_PAN_CONNECTED = 0x0008,
 	/** SAP connected */
-	VCONFKEY_BT_DEVICE_SAP_CONNECTED = 0x0020,
+	VCONFKEY_BT_DEVICE_SAP_CONNECTED = 0x0010,
 	/** PBAP connected */
-	VCONFKEY_BT_DEVICE_PBAP_CONNECTED = 0x0040
+	VCONFKEY_BT_DEVICE_PBAP_CONNECTED = 0x0020,
+	/** HID connected for each device type */
+	VCONFKEY_BT_DEVICE_HID_KEYBOARD_CONNECTED = 0x0040,
+	VCONFKEY_BT_DEVICE_HID_MOUSE_CONNECTED = 0x00080,
+	/** AG connected */
+	VCONFKEY_BT_DEVICE_AG_CONNECTED = 0x1000
 };
 
 /* Media sound path for BT */
@@ -206,6 +223,7 @@ enum {
 /**
  * @defgroup vconf_key_idleLock idleLock Keys
  * @ingroup vconf_key
+ * @internal
  * @addtogroup vconf_key_idleLock
  * @{
  * @brief Maintainer : seungtaek.chung@samsung.com, wonil22.choi@samsung.com hyoyoung.chang@samsung.com angelkim@samsung.com
@@ -222,7 +240,9 @@ enum {
 	/** unlocked state */
 	VCONFKEY_IDLE_UNLOCK = 0x00,
 	/** locked state */
-	VCONFKEY_IDLE_LOCK
+	VCONFKEY_IDLE_LOCK,
+	/** locking state */
+	VCONFKEY_IDLE_LAUNCHING_LOCK
 };
 
 /**
@@ -242,6 +262,7 @@ enum {
 /**
  * @defgroup vconf_key_pwlock Lock application for password verification: phone, pin, sum, network, etc.
  * @ingroup vconf_key
+ * @internal
  * @addtogroup vconf_key_pwlock
  * @{
  * @brief Maintainer : seungtaek.chung@samsung.com miju52.lee@samsung.com
@@ -272,5 +293,49 @@ enum {
  * @}
  */
 
+
+
+/* =========================== browser =======================================*/
+/**
+ * @defgroup vconf_key_browser browser public keys
+ * @ingroup vconf_key
+ * @internal
+ * @addtogroup vconf_key_browser
+ * @{
+ * @brief Maintainer : sangpyo7.kim@samsung.com ibchang@samsung.com
+ *
+ */
+
+/**
+ * @brief browser user agent string
+ *
+ * Value : The user agent string currently being used by embeded browser \n
+ */
+#define VCONFKEY_BROWSER_USER_AGENT		"db/browser/user_agent"
+
+/**
+ * @brief browser user agent profile
+ *
+ * Value : The user agent string profile currently being used by embeded browser for 2G network \n
+ */
+#define VCONFKEY_BROWSER_USER_AGENT_PROFILE_2G		"db/browser/user_agent_profile_2G"
+
+/**
+ * @brief browser user agent profile
+ *
+ * Value : The user agent string profile currently being used by embeded browser for 3G network \n
+ */
+#define VCONFKEY_BROWSER_USER_AGENT_PROFILE_3G		"db/browser/user_agent_profile_3G"
+
+/**
+ * @brief browser user agent profile
+ *
+ * Value : The user agent string profile currently being used by embeded browser for 4G network \n
+ */
+#define VCONFKEY_BROWSER_USER_AGENT_PROFILE_4G		"db/browser/user_agent_profile_4G"
+
+/**
+ * @}
+ */
 #endif				/* __VCONF_KEYS_H__ */
 

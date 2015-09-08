@@ -4,9 +4,7 @@ TARGETS = utc_ApplicationFW_vconf_set_int_func \
 		utc_ApplicationFW_vconf_set_bool_func \
 		utc_ApplicationFW_vconf_set_str_func \
 		utc_ApplicationFW_vconf_set_dbl_func \
-		utc_ApplicationFW_vconf_set_bytes_func \
 		utc_ApplicationFW_vconf_get_bool_func \
-		utc_ApplicationFW_vconf_get_bytes_func \
 		utc_ApplicationFW_vconf_get_dbl_func \
 		utc_ApplicationFW_vconf_get_int_func \
 		utc_ApplicationFW_vconf_get_str_func \
@@ -34,7 +32,8 @@ TARGETS = utc_ApplicationFW_vconf_set_int_func \
 		utc_ApplicationFW_vconf_set_func \
 		utc_ApplicationFW_vconf_sync_key_func \
 		utc_ApplicationFW_vconf_ignore_key_changed_func \
-		utc_ApplicationFW_vconf_notify_key_changed_func
+		utc_ApplicationFW_vconf_notify_key_changed_func \
+		utc_ApplicationFW_vconf_get_ext_errno_func
 
 PKGS = vconf glib-2.0
 

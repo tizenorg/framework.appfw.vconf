@@ -30,6 +30,8 @@
 #include <unistd.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <sys/wait.h>
+#include <sys/smack.h>
 #include <fcntl.h>
 #include <errno.h>
 
@@ -44,6 +46,10 @@ enum {
 };
 
 #define BUFSIZE		1024
+#define CMDSIZE		4096
+
+#define DEFAULT_SMACK_LABEL "system::vconf"
+#define LCK_FILE_GRP 5000
 
 const char *BACKEND_DB_PREFIX = "db/";
 const char *BACKEND_FILE_PREFIX = "file/";
@@ -56,11 +62,14 @@ const char *MEMORY_INIT = "/opt/var/kdb/memory_init";
 
 static char *guid = NULL;
 static char *uid = NULL;
+static char *smack_label = NULL;
 static char *vconf_type = NULL;
 static int is_recursive = FALSE;
 static int is_initialization = FALSE;
 static int is_forced = FALSE;
 static int get_num = 0;
+
+#define VCONF_LCK_FILE_FMT "%s/.%s.lck"
 
 static GOptionEntry entries[] = {
 	{"type", 't', 0, G_OPTION_ARG_STRING, &vconf_type, "type of value",
@@ -73,6 +82,8 @@ static GOptionEntry entries[] = {
 	 "memory backend initialization", NULL},
 	{"force", 'f', 0, G_OPTION_ARG_NONE, &is_forced,
 	 "overwrite vconf values by force", NULL},
+	{"smack", 's', 0, G_OPTION_ARG_STRING, &smack_label,
+	 "smack access label", NULL},
 	{NULL}
 };
 
@@ -113,11 +124,21 @@ static void print_help(const char *cmd)
 	fprintf(stderr,
 		"          -i : Install memory backend key into flash space for backup.\n");
 	fprintf(stderr,
-		"           Ex) %s set -t string db/testapp/key1 \"This is test\" -i\n",
+		"           Ex) %s set -t string memory/testapp/key1 \"This is test\" -i\n",
 		cmd);
 	fprintf(stderr, "\n");
 	fprintf(stderr,
 		"          -f : Overwrite values by force, even when vconf values are already exist.\n");
+	fprintf(stderr, "\n");
+	fprintf(stderr,
+		"          -s <SMACK LABEL>: Set smack access label for the vconf key.\n");
+	fprintf(stderr,
+		"           Ex) %s set -t string db/testapp/key1 \"This is test\" -s system::vconf_setting\n",
+		cmd);
+	fprintf(stderr,
+		"           NOTE: If -s option is not used, the default smack access label system::vconf will be set.\n");
+	fprintf(stderr,
+		"           NOTE: Maximum label size is 255 byte and '/', '~', ' ' is not permitted.\n");
 	fprintf(stderr, "\n");
 	fprintf(stderr, "[Get vconf value]\n");
 	fprintf(stderr, "       %s get <OPTIONS> <KEY NAME>\n", cmd);
@@ -176,20 +197,20 @@ static int __system(char * cmd)
 	} else {
 		/* parent */
 		if (waitpid(cpid, &status, 0) == -1) {
-			perror("waitpid failed");
+			perror("waitpid failed\n");
 			return -1;
 		}
 		if (WIFSIGNALED(status)) {
 			printf("signal(%d)\n", WTERMSIG(status));
-			perror("exit by signal");
+			perror("exit by signal\n");
 			return -1;
 		}
 		if (!WIFEXITED(status)) {
-			perror("exit abnormally");
+			perror("exit abnormally\n");
 			return -1;
 		}
 		if (WIFEXITED(status) && WEXITSTATUS(status)) {
-			perror("child return error");
+			perror("child return error\n");
 			return -1;
 		}
 	}
@@ -211,12 +232,71 @@ static void disable_invalid_char(char* src)
 	}
 }
 
+static int _check_parent_dir(const char* path)
+{
+	int stat_ret = 0;
+	struct stat stat_info;
+	char* parent;
+	char path_buf[BUFSIZE] = {0,};
+	int ret = 0;
+
+	const char* dir_smack_label = "system::vconf";
+	mode_t dir_mode = 0755;
+
+	parent = strrchr(path, '/');
+	strncpy(path_buf, path, parent-path);
+	path_buf[parent-path]=0;
+
+	stat_ret = stat(path_buf,&stat_info);
+	if(stat_ret){
+		if(mkdir(path_buf, dir_mode) != 0) {
+			if(errno == ENOENT) {
+				ret = _check_parent_dir((const char*)path_buf);
+				if(ret != VCONF_OK) return ret;
+				if(mkdir(path_buf, dir_mode) != 0) {
+					ERR("mkdir error(%d)", errno);
+					return -1;
+				}
+			} else {
+				ERR("mkdir error(%d)", errno);
+				return -1;
+			}
+		}
+
+		if (smack_lsetlabel(path_buf, dir_smack_label, SMACK_LABEL_ACCESS) < 0) {
+			if (errno != EOPNOTSUPP) {
+				fprintf(stderr, "smack set label (%s) failed (%s)\n", dir_smack_label, path_buf);
+			}
+		}
+
+		if (smack_lsetlabel(path_buf, "1", SMACK_LABEL_TRANSMUTE) < 0) {
+			if (errno != EOPNOTSUPP) {
+				fprintf(stderr, "smack set label (%s) failed (%s)\n", dir_smack_label, path_buf);
+			}
+		}
+	}
+
+	return 0;
+}
+
 static int check_file_path_mode(char* file_path)
 {
-	char szCmd[BUFSIZE] = {0,};
 	int create_file = 0;
 	int set_id = 0;
 	int fd;
+
+#ifdef VCONF_USE_LOCK_FILE
+	char szPath[BUFSIZE] = {0,};
+	char szCmd[CMDSIZE] = {0,};
+	char *pCh = NULL;
+	char szLck[BUFSIZE] = {0,};
+#endif
+
+	if(!file_path) {
+		fprintf(stderr,
+				"Error!\t file_path is null\n");
+		return -1;
+	}
 
 	if (guid || uid) {
 		if (getuid() != 0) {
@@ -232,22 +312,10 @@ static int check_file_path_mode(char* file_path)
 	if (access(file_path, F_OK) != 0) {
 		/* fprintf(stderr,"key does not exist\n"); */
 
-		char szPath[BUFSIZE] = { 0, };
-		char *pCh = strrchr(file_path, '/');
-		strncat(szPath, file_path, pCh - file_path);
-		/* fprintf(stderr, "szPath : %s\n", szPath); */
-
 		/* Check directory & create it */
-		if (access(szPath, F_OK) != 0) {
-			/* fprintf(stderr,"parent dir does not exist\n"); */
-
-			snprintf(szCmd, BUFSIZE, "/bin/mkdir %s -p --mode=755", szPath);
-			disable_invalid_char(szCmd);
-			if (__system(szCmd)) {
-				fprintf(stderr,"Fail mkdir() szCmd=%s\n", __FILE__, __LINE__, szCmd);
-				return -1;
-			}
-
+		if(_check_parent_dir(file_path)) {
+			fprintf(stderr, "fail to mkdir (%s) \n", file_path);
+			return -1;
 		}
 
 		create_file = 1;
@@ -267,6 +335,48 @@ static int check_file_path_mode(char* file_path)
 			return -1;
 		}
 		close(fd);
+
+		if (smack_label) {
+			if (smack_setlabel(file_path, smack_label, SMACK_LABEL_ACCESS) < 0) {
+				if (errno != EOPNOTSUPP) {
+					fprintf(stderr, "smack set label (%s) failed (%s)\n", smack_label, file_path);
+					return -1;
+				}
+			}
+		}
+
+#ifdef VCONF_USE_LOCK_FILE
+		/* Create lock file */
+		memset(szCmd, 0x00, CMDSIZE);
+		memset(szPath, 0x00, BUFSIZE);
+
+		pCh = strrchr(file_path, '/');
+		strncat(szPath, file_path, pCh - file_path);
+
+		snprintf(szLck, BUFSIZE, VCONF_LCK_FILE_FMT, szPath, pCh+1);
+
+		temp = umask(0000);
+		fd = open(szLck, O_WRONLY|O_CREAT, S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP|S_IROTH|S_IWOTH);
+		umask(temp);
+
+		if (fd == -1) {
+			fprintf(stderr, "open(rdonly) error\n");
+			return -1;
+		}
+		if (fchown(fd, 0, LCK_FILE_GRP) == -1) {
+			fprintf(stderr, "Error!\t Fail to fchown()\n");
+			close(fd);
+			return -1;
+		}
+		close(fd);
+
+		if (smack_setlabel(szLck, DEFAULT_SMACK_LABEL, SMACK_LABEL_ACCESS) < 0) {
+			if (errno != EOPNOTSUPP) {
+				fprintf(stderr, "smack set label (%s) failed (%s)\n", DEFAULT_SMACK_LABEL, szLck);
+				return -1;
+			}
+		}
+#endif
 	}
 
 	if(set_id) {
@@ -295,6 +405,16 @@ static int check_file_path_mode(char* file_path)
 	return 0;
 }
 
+/*
+ * there are three different types of vconf key back-end
+ * 1. filesytem
+ * 2. sqlitefs based on sqlite3
+ * 3. tmpfs based on memory
+ * considering to that tmpfs is volatile so there should be a way
+ * to initialize key into permanent storage. That is the below function
+ * which copy memory back-end key to filesystem back-end, copy other back-end
+ * key to filesystem back-end just makes no sense.
+ */
 static int copy_memory_key(char *pszKey, char *pszOrigin)
 {
 	char szCmd[BUFSIZE] = { 0, };
@@ -302,6 +422,15 @@ static int copy_memory_key(char *pszKey, char *pszOrigin)
 	char szFileName[BUFSIZE] = { 0, };
 	char *pCh = strrchr(pszKey, '/');
 	int nLen = strlen(pszKey);
+	char szFilePath[BUFSIZE] = { 0, };
+
+#ifdef VCONF_USE_LOCK_FILE
+	char szLck[BUFSIZE] = {0,};
+#endif
+
+	/* only copy memory/ prefix key */
+	if (strncmp("memory/", pszKey, 7))
+		return 0;
 
 	/* Get directory path and file name */
 	snprintf(szPath, BUFSIZE, "%s/", MEMORY_INIT);
@@ -310,8 +439,8 @@ static int copy_memory_key(char *pszKey, char *pszOrigin)
 
 	/* Check directory & create it */
 	if (0 != access(szPath, F_OK)) {
-		snprintf(szCmd, BUFSIZE, "mkdir %s -p --mode=755", szPath);
-		if (system(szCmd)) {
+		snprintf(szCmd, BUFSIZE, "/bin/mkdir %s -p -m 755", szPath);
+		if (__system(szCmd)) {
 			printf("[%s:%d]Fail mkdir() szCmd=%s\n", __FILE__,
 			       __LINE__, szCmd);
 			return -1;
@@ -319,13 +448,45 @@ static int copy_memory_key(char *pszKey, char *pszOrigin)
 	}
 	/* copy */
 	strncat(szPath, "/", 1);
-	strncat(szPath, szFileName, strlen(szFileName));
 	memset(szCmd, 0x00, BUFSIZE);
-	snprintf(szCmd, BUFSIZE, "cp %s %s -r -p", pszOrigin, szPath);
-	if (system(szCmd)) {
+	snprintf(szCmd, BUFSIZE, "/bin/cp %s %s -af", pszOrigin, szPath);
+	if (__system(szCmd)) {
 		printf("[%s:%d]Fail copy\n", __FILE__, __LINE__);
 		return -1;
 	}
+
+	/* set smack label */
+	snprintf(szFilePath, BUFSIZE,  "%s/%s", szPath, szFileName);
+	if (smack_setlabel(szFilePath, smack_label, SMACK_LABEL_ACCESS) < 0) {
+		if (errno != EOPNOTSUPP) {
+			fprintf(stderr, "smack set label (%s) failed (%s)\n", smack_label, szFilePath);
+			return -1;
+		}
+	}
+#ifdef VCONF_USE_LOCK_FILE
+	memset(szCmd, 0x00, BUFSIZE);
+	pCh = strrchr(pszOrigin, '/');
+	strncat(szCmd, pszOrigin, pCh - pszOrigin);
+	snprintf(szLck, BUFSIZE, VCONF_LCK_FILE_FMT, szCmd, pCh+1);
+
+	memset(szCmd, 0x00, BUFSIZE);
+	snprintf(szCmd, BUFSIZE, "/bin/cp %s %s -af", szLck, szPath);
+	if (__system(szCmd)) {
+		printf("[%s:%d]Fail copy\n", __FILE__, __LINE__);
+		return -1;
+	}
+
+	/* set smack label */
+	snprintf(szFilePath, BUFSIZE, "%s/.%s.lck\0", szPath, szFileName);
+	if (smack_setlabel(szFilePath, DEFAULT_SMACK_LABEL, SMACK_LABEL_ACCESS) < 0) {
+		if (errno != EOPNOTSUPP) {
+			fprintf(stderr, "smack set label (%s) failed (%s)\n", smack_label, szFilePath);
+			return -1;
+		}
+	}
+
+#endif
+
 	return 0;
 }
 
@@ -353,9 +514,7 @@ int main(int argc, char **argv)
 {
 	int set_type;
 	char szFilePath[BUFSIZE] = { 0, };
-	int fd;
-	int group_id;
-	int user_id;
+	char *psz_key = NULL;
 
 	GError *error = NULL;
 	GOptionContext *context;
@@ -383,37 +542,67 @@ int main(int argc, char **argv)
 			return 1;
 		}
 
-		if (make_file_path(argv[2], szFilePath)) {
+		if (smack_label) {
+			if (getuid() != 0) {
+				fprintf(stderr,
+					"Error!\t Only root user can use '-s' option\n");
+				return -1;
+			}
+		}
+
+#ifdef COMBINE_FOLDER
+		char convert_key[1024+1] = {0,};
+		char *chrptr = NULL;
+
+		strncpy(convert_key, argv[2], 1024);
+
+		chrptr = strchr((const char*)convert_key, (int)'/');
+		if(!chrptr) {
+			fprintf(stderr, "Error!\t wrong key path\n");
+			return -1;
+		}
+		chrptr = strchr((const char*)chrptr+1, (int)'/');
+		while(chrptr) {
+			convert_key[chrptr-convert_key] = '+';
+			chrptr = strchr((const char*)chrptr+1, (int)'/');
+		}
+		psz_key = convert_key;
+#else
+		psz_key = argv[2];
+#endif
+
+		if (make_file_path(psz_key, szFilePath)) {
 			fprintf(stderr, "Error!\t Bad prefix\n");
 			return -1;
 		}
 
 		if (check_file_path_mode(szFilePath)) {
-			fprintf(stderr, "Error!\t create key %s\n", argv[2]);
+			fprintf(stderr, "Error!\t create key %s\n", psz_key);
 			return -1;
 		}
 
 		switch (set_type) {
 			case VCONFTOOL_TYPE_STRING:
-				vconf_set_str(argv[2], argv[3]);
+				vconf_set_str(psz_key, argv[3]);
 				break;
 			case VCONFTOOL_TYPE_INT:
-				vconf_set_int(argv[2], atoi(argv[3]));
+				vconf_set_int(psz_key, atoi(argv[3]));
 				break;
 			case VCONFTOOL_TYPE_DOUBLE:
-				vconf_set_dbl(argv[2], atof(argv[3]));
+				vconf_set_dbl(psz_key, atof(argv[3]));
 				break;
 			case VCONFTOOL_TYPE_BOOL:
-				vconf_set_bool(argv[2], !!atoi(argv[3]));
+				vconf_set_bool(psz_key, !!atoi(argv[3]));
 				break;
 			default:
 				fprintf(stderr, "never reach");
 				exit(1);
 		}
 
+
 		/* Install memory backend key into flash space *******/
 		if (is_initialization) {
-			copy_memory_key(argv[2], szFilePath);
+			copy_memory_key(psz_key, szFilePath);
 		}
 		/* End memory backend key into flash space ***********/
 
@@ -423,8 +612,13 @@ int main(int argc, char **argv)
 		else
 			print_help(argv[0]);
 	} else if (!strncmp(argv[1], "unset", 5)) {
-		if (argv[2])
-			vconf_unset(argv[2]);
+		if (argv[2]) {
+			if(is_recursive) {
+				vconf_unset_recursive(argv[2]);
+			} else {	
+				vconf_unset(argv[2]);
+			}
+		}
 		else
 			print_help(argv[0]);
 	} else
@@ -453,7 +647,9 @@ static void get_operation(char *input)
 				*(test + 1) = '\0';
 			else
 				*test = '\0';
-			vconf_get(get_keylist, input, VCONF_GET_KEY);
+			if(vconf_get(get_keylist, input, VCONF_GET_KEY)!=VCONF_OK) {
+				fprintf(stderr, "error in get vconf(%s) value\n", input);
+			}
 			temp_node = vconf_keylist_nextnode(get_keylist);
 		} else {
 			fprintf(stderr, "Include at least one slash\"/\"\n");
@@ -503,7 +699,7 @@ static void print_keylist(keylist_t *keylist, keynode_t *temp_node, int level)
 				get_num++;
 				break;
 			case VCONF_TYPE_DOUBLE:
-				printf("%s, value = %f (double)\n",
+				printf("%s, value = %.16lf (double)\n",
 				       vconf_keynode_get_name(temp_node),
 				       vconf_keynode_get_dbl(temp_node));
 				get_num++;

@@ -38,6 +38,9 @@
 struct noti_node {
 	int wd;
 	char *keyname;
+#ifdef VCONF_SUPPORT_ZONE
+	char *zone_name;
+#endif
 	vconf_callback_fn cb;
 	void *cb_data;
 	struct noti_node *next;
@@ -121,6 +124,11 @@ static GList* _vconf_copy_noti_list(GList *orig_notilist)
 			n->wd = t->wd;
 			n->cb_data = t->cb_data;
 			n->cb = t->cb;
+#ifdef VCONF_SUPPORT_ZONE
+			if((t->zone_name != NULL) && (strlen(t->zone_name) != 0)) {
+				n->zone_name = strndup(t->zone_name, VCONF_ZONE_NAME_LEN);
+			}
+#endif
 
 			copy_notilist = g_list_append(copy_notilist, n);
 		} while (0);
@@ -134,6 +142,9 @@ static void _vconf_free_noti_node(gpointer data)
 {
 	struct noti_node *n = (struct noti_node*)data;
 	g_free(n->keyname);
+#ifdef VCONF_SUPPORT_ZONE
+	g_free(n->zone_name);
+#endif
 	g_free(n);
 }
 
@@ -186,6 +197,11 @@ static gboolean _vconf_kdb_gio_cb(GIOChannel *src, GIOCondition cond, gpointer d
 							_vconf_kdb_del_notify(t->keyname, t->cb);
 						} else {
 							_vconf_keynode_set_keyname(keynode, t->keyname);
+#ifdef VCONF_SUPPORT_ZONE
+							if(t->zone_name != NULL) {
+								_vconf_keynode_set_zone(keynode, t->zone_name);
+							}
+#endif
 							_vconf_get_key(keynode);
 							INFO("key(%s) is changed. cb(%p) called", t->keyname, t->cb);
 							t->cb(keynode, t->cb_data);
@@ -348,6 +364,83 @@ out_func:
 	return func_ret;
 }
 
+#ifdef VCONF_SUPPORT_ZONE
+int _vconf_kdb_add_notify_zone(const char *keyname, vconf_callback_fn cb, void *data, const char *zone_name)
+{
+	char path[VCONF_KEY_PATH_LEN];
+	int wd;
+	struct noti_node t, *n;
+	char err_buf[ERR_LEN] = { 0, };
+	int ret = 0;
+	GList *list = NULL;
+	int func_ret = VCONF_OK;
+
+	retvm_if((keyname == NULL || cb == NULL || zone_name == NULL), VCONF_ERROR,
+			"_vconf_kdb_add_notify : Invalid argument - keyname(%s) cb(%p) zone(%s)",
+			keyname, cb, zone_name);
+
+	if (_kdb_inoti_fd <= 0)
+		if (_vconf_kdb_noti_init())
+			return VCONF_ERROR;
+
+	ret = _vconf_get_key_path_zone((char*)keyname, path, (char*)zone_name);
+	retvm_if(ret != VCONF_OK, VCONF_ERROR, "Invalid argument: key is not valid");
+
+	if (0 != access(path, F_OK)) {
+		if (errno == ENOENT) {
+			ERR("_vconf_kdb_add_notify : Key(%s) does not exist", keyname);
+			return VCONF_ERROR;
+		}
+	}
+
+	wd = inotify_add_watch(_kdb_inoti_fd, path, INOTY_EVENT_MASK);
+	if (wd == -1) {
+		strerror_r(errno, err_buf, sizeof(err_buf));
+		ERR("_vconf_kdb_add_notify : add noti(%s)", err_buf);
+		return VCONF_ERROR;
+	}
+
+	t.wd = wd;
+	t.cb = cb;
+
+	pthread_mutex_lock(&_kdb_g_ns_mutex);
+
+	list = g_list_find_custom(g_notilist, &t, (GCompareFunc)_vconf_inoti_comp_with_wd_cb);
+	if (list) {
+		//ERR("_vconf_kdb_add_notify : key(%s) has same callback(%p)", keyname, cb);
+		errno = EALREADY;
+		func_ret = VCONF_ERROR;
+		goto out_func;
+	}
+
+	n = calloc(1, sizeof(noti_node_s));
+	if (n == NULL) {
+		strerror_r(errno, err_buf, sizeof(err_buf));
+		ERR("_vconf_kdb_add_notify : add noti(%s)", err_buf);
+		func_ret = VCONF_ERROR;
+		goto out_func;
+	}
+
+	n->wd = wd;
+	n->keyname = strndup(keyname, VCONF_KEY_PATH_LEN);
+	n->cb_data = data;
+	n->cb = cb;
+	n->zone_name = strndup(zone_name, VCONF_ZONE_NAME_LEN);
+
+	g_notilist = g_list_append(g_notilist, n);
+	if(!g_notilist) {
+		ERR("g_list_append fail");
+	}
+
+	INFO("cb(%p) is added for %s for zone. tot cb cnt : %d\n", cb, n->keyname, g_list_length(g_notilist));
+
+out_func:
+	pthread_mutex_unlock(&_kdb_g_ns_mutex);
+
+	return func_ret;
+}
+#endif
+
 	int
 _vconf_kdb_del_notify(const char *keyname, vconf_callback_fn cb)
 {
@@ -429,3 +522,87 @@ _vconf_kdb_del_notify(const char *keyname, vconf_callback_fn cb)
 
 	return func_ret;
 }
+
+#ifdef VCONF_SUPPORT_ZONE
+int _vconf_kdb_del_notify_zone(const char *keyname, vconf_callback_fn cb, const char *zone_name)
+{
+	int wd = 0;
+	int r = 0;
+	struct noti_node *n = NULL;
+	struct noti_node t;
+	char path[VCONF_KEY_PATH_LEN] = { 0, };
+	char err_buf[ERR_LEN] = { 0, };
+	int del = 0;
+	int ret = 0;
+	int func_ret = VCONF_OK;
+	GList *noti_list;
+
+	retvm_if(keyname == NULL, VCONF_ERROR, "Invalid argument: keyname(%s)", keyname);
+	retvm_if(_kdb_inoti_fd == 0, VCONF_ERROR, "Invalid operation: not exist anything for inotify");
+
+	ret = _vconf_get_key_path_zone((char*)keyname, path, (char*)zone_name);
+	retvm_if(ret != VCONF_OK, VCONF_ERROR, "Invalid argument: key is not valid");
+
+	/* get wd */
+	wd = inotify_add_watch(_kdb_inoti_fd, path, INOTY_EVENT_MASK);
+	if (wd == -1) {
+		strerror_r(errno, err_buf, sizeof(err_buf));
+		ERR("Error: inotify_add_watch() [%s]: %s", path, err_buf);
+		return VCONF_ERROR;
+	}
+
+	pthread_mutex_lock(&_kdb_g_ns_mutex);
+
+	t.wd = wd;
+	t.cb = cb;
+
+	noti_list = g_list_find_custom(g_notilist, &t, (GCompareFunc)_vconf_inoti_comp_with_wd_cb);
+	if(noti_list) {
+		del++;
+
+		n = noti_list->data;
+		g_notilist = g_list_remove(g_notilist, n);
+		g_free(n->keyname);
+		g_free(n->zone_name);
+		g_free(n);
+
+		INFO("key(%s) cb is removed. remained noti list total length(%d)",
+				keyname, g_list_length(g_notilist));
+	}
+
+	noti_list = NULL;
+	noti_list = g_list_find_custom(g_notilist, &t, (GCompareFunc)_vconf_inoti_comp_with_wd);
+	if(noti_list == NULL) {
+		INFO("all noti for keyname(%s)/wd(%d) is removed", keyname, wd);
+
+		r = inotify_rm_watch(_kdb_inoti_fd, wd);
+		if(r == -1) {
+			strerror_r(errno, err_buf, sizeof(err_buf));
+			ERR("Error: inotify_rm_watch [%s]: %s", keyname, err_buf);
+			func_ret = VCONF_ERROR;
+		}
+	}
+
+	if(g_list_length(g_notilist) == 0) {
+		close(_kdb_inoti_fd);
+		_kdb_inoti_fd = 0;
+
+		g_source_destroy(_kdb_handler);
+		_kdb_handler = NULL;
+
+		g_list_free(g_notilist);
+		g_notilist = NULL;
+
+		INFO("all noti list is freed");
+	}
+
+	pthread_mutex_unlock(&_kdb_g_ns_mutex);
+
+	if(del == 0) {
+		errno = ENOENT;
+		func_ret = VCONF_ERROR;
+	}
+
+	return func_ret;
+}
+#endif

@@ -922,47 +922,15 @@ int main(int argc, char **argv)
 		switch (set_type) {
 			case VCONFTOOL_TYPE_STRING:
 				vconf_set_str(psz_key, argv[3]);
-				fprintf(stderr, "*************** WARNING!!!\t create key %s - value : %s \n", psz_key, argv[3]);
-				#if 1
-				if (smack_label)	{
-					ERR("vconf_set_str(%d) : %s(%s) --- smack : %s", getpid(), psz_key, argv[3], smack_label);
-				} else {
-					ERR("vconf_set_str(%d) : %s(%s) error", getpid(), psz_key, argv[3]);
-				}
-				#endif
 				break;
 			case VCONFTOOL_TYPE_INT:
 				vconf_set_int(psz_key, atoi(argv[3]));
-				fprintf(stderr, "*************** WARNING!!!\t create key %s - value : %s \n", psz_key, argv[3]);
-				#if 1	
-				if (smack_label)	{
-					ERR("vconf_set_int(%d) : %s(%s) --- smack : %s", getpid(), psz_key, argv[3], smack_label);
-				} else {
-					ERR("vconf_set_int(%d) : %s(%s) error", getpid(), psz_key, argv[3]);
-				}
-				#endif
 				break;
 			case VCONFTOOL_TYPE_DOUBLE:
 				vconf_set_dbl(psz_key, atof(argv[3]));
-				fprintf(stderr, "*************** WARNING!!!\t create key %s - value : %s \n", psz_key, argv[3]);
-				#if 1	
-				if (smack_label)	{
-					ERR("vconf_set_dbl(%d) : %s(%s) --- smack : %s", getpid(), psz_key, argv[3], smack_label);
-				} else {
-					ERR("vconf_set_dbl(%d) : %s(%s) error", getpid(), psz_key, argv[3]);
-				}
-				#endif
 				break;
 			case VCONFTOOL_TYPE_BOOL:
 				vconf_set_bool(psz_key, !!atoi(argv[3]));
-				fprintf(stderr, "*************** WARNING!!!\t create key %s - value : %s \n", psz_key, argv[3]);
-				#if 1
-				if (smack_label)	{
-					ERR("vconf_set_bool(%d) : %s(%s) --- smack : %s", getpid(), psz_key, argv[3], smack_label);
-				} else {
-					ERR("vconf_set_bool(%d) : %s(%s) error", getpid(), psz_key, argv[3]);
-				}
-				#endif
 				break;
 			default:
 				fprintf(stderr, "[vconf] set type never reach");

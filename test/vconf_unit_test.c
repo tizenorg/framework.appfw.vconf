@@ -238,7 +238,9 @@ void notify_operation(int i)
    
 int main(int argc, char **argv)
 {
+#if !GLIB_CHECK_VERSION(2,35,0)
    g_type_init();
+#endif
 
    set_operation(0);
    set_operation(1);

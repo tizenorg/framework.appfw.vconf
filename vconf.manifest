@@ -6,5 +6,7 @@
 		<filesystem path="/bin/*" exec_label="none" />
 		<filesystem path="/usr/bin/*" exec_label="none" />
 		<filesystem path="/etc/rc.d/init.d/vconf-init" exec_label="none" />
+		<filesystem path="/opt/etc/dump.d/module.d/vconf_dump.sh" label="_" exec_label="none"/>
+		<filesystem path="/usr/share/dbus-1/system-services/org.vconf.restore-key.service" label="_"/>
 	</assign>
 </manifest>

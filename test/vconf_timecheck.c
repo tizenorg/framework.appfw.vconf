@@ -152,7 +152,9 @@ int main(int argc, char **argv)
 {
    int operation;
 
+#if !GLIB_CHECK_VERSION(2,35,0)
    g_type_init();
+#endif
    ecore_init();
    if(argc < 2) {
       fprintf(stderr, "1:set(db), 2:set(file), 3:set(memory), 4:set(gconf_d), 5:set(gconf_l) \n");

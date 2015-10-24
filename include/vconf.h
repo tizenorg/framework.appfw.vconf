@@ -33,7 +33,6 @@ extern "C" {
  */
 
 /**
- * @internal
  * @addtogroup StorageFW_VCONF_MODULE
  * @{
  */
@@ -177,6 +176,13 @@ extern "C" {
 #define VCONF_ERROR_FILE_TRUNCATE   -32
 
 /**
+ * @brief Definition for VCONF_ERROR_NOT_SUPPORTED.
+ * @since_tizen 2.3
+ */
+#define VCONF_ERROR_NOT_SUPPORTED   -33
+
+
+/**
  * @brief Enumeration for uses of vconf_get().
  * @since_tizen 2.3
  * @see vconf_get()
@@ -229,6 +235,9 @@ typedef struct _keynode_t {
         double d;            /**< Double type */
         char *s;             /**< String type */
     } value;                 /**< Value for keynode */
+#ifdef VCONF_SUPPORT_ZONE
+    char *zone_name;    /**< Value for zone name */
+#endif
     struct _keynode_t *next; /**< Next keynode */
 } keynode_t;
 
@@ -288,6 +297,10 @@ typedef struct _keylist_t {
  * @see vconf_t
  */
     char *vconf_keynode_get_name(keynode_t *keynode);
+
+#ifdef VCONF_SUPPORT_ZONE
+    char *vconf_keynode_get_zone_name(keynode_t *keynode);
+#endif
 
 /**
  * @brief Gets the value type of a keynode.
@@ -774,6 +787,10 @@ int main()
  */
     int vconf_set_int(const char *in_key, const int intval);
 
+#ifdef VCONF_SUPPORT_ZONE
+    int vconf_set_int_zone(const char *in_key, const int intval, const char *zone_name);
+#endif
+
 /**
  * @brief Sets the boolean value of the given key.
  *
@@ -817,6 +834,10 @@ int main()
  */
     int vconf_set_bool(const char *in_key, const int boolval);
 
+#ifdef VCONF_SUPPORT_ZONE
+    int vconf_set_bool_zone(const char *in_key, const int boolval, const char *zone_name);
+#endif
+
 /**
  * @brief Sets the double value of the given key.
  *
@@ -834,6 +855,10 @@ int main()
  * @see vconf_set_str()
  */
     int vconf_set_dbl(const char *in_key, const double dblval);
+
+#ifdef VCONF_SUPPORT_ZONE
+    int vconf_set_dbl_zone(const char *in_key, const double dblval, const char *zone_name);
+#endif
 
 /**
  * @brief Sets the string value of the given key.
@@ -853,6 +878,10 @@ int main()
  * @see vconf_set_int()
  */
     int vconf_set_str(const char *in_key, const char *strval);
+
+#ifdef VCONF_SUPPORT_ZONE
+    int vconf_set_str_zone(const char *in_key, const char *strval, const char *zone_name);
+#endif
 
 /**
  * @brief Gets the keys or subdirectory in in_parentDIR.
@@ -957,6 +986,10 @@ int main(int argc, char **argv)
  */
     int vconf_get_int(const char *in_key, int *intval);
 
+#ifdef VCONF_SUPPORT_ZONE
+    int vconf_get_int_zone(const char *in_key, int *intval, const char *zone_name);
+#endif
+
 /**
  * @brief Gets the boolean value (@c 1 or @c 0) of the given key.
  *
@@ -974,6 +1007,10 @@ int main(int argc, char **argv)
  */
     int vconf_get_bool(const char *in_key, int *boolval);
 
+#ifdef VCONF_SUPPORT_ZONE
+    int vconf_get_bool_zone(const char *in_key, int *boolval, const char *zone_name);
+#endif
+
 /**
  * @brief Gets the double value of the given key.
  *
@@ -990,6 +1027,10 @@ int main(int argc, char **argv)
  * @see vconf_get_str()
  */
     int vconf_get_dbl(const char *in_key, double *dblval);
+
+#ifdef VCONF_SUPPORT_ZONE
+    int vconf_get_dbl_zone(const char *in_key, double *dblval, const char *zone_name);
+#endif
 
 /**
  * @brief Gets the string value of the given key.
@@ -1020,6 +1061,10 @@ int main(int argc, char **argv)
  * @endcode
  */
     char *vconf_get_str(const char *in_key);
+
+#ifdef VCONF_SUPPORT_ZONE
+    char *vconf_get_str_zone(const char *in_key, const char *zone_name);
+#endif
 
 /**
  * @brief Deletes the given key from the backend system.
@@ -1157,6 +1202,11 @@ int main(int argc, char **argv)
     int vconf_notify_key_changed(const char *in_key, vconf_callback_fn cb,
                      void *user_data);
 
+#ifdef VCONF_SUPPORT_ZONE
+    int vconf_notify_key_changed_zone(const char *in_key, vconf_callback_fn cb,
+                     void *user_data, const char *zone_name);
+#endif
+
 /**
  * @brief Removes a change callback for the given key,
  *        which was added by vconf_notify_key_changed().
@@ -1172,6 +1222,10 @@ int main(int argc, char **argv)
  * @see vconf_notify_key_changed()
  */
     int vconf_ignore_key_changed(const char *in_key, vconf_callback_fn cb);
+
+#ifdef VCONF_SUPPORT_ZONE
+    int vconf_ignore_key_changed_zone(const char *in_key, vconf_callback_fn cb, const char *zone_name);
+#endif
 
 
 /**

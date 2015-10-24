@@ -4,13 +4,18 @@
 
 /bin/mkdir /var/run/memory
 /bin/chmod 777 /var/run/memory
-/usr/bin/chsmack -a 'system::vconf' /var/run/memory
+/usr/bin/chsmack -a '_' /var/run/memory
 /usr/bin/chsmack -t /var/run/memory
 
+/usr/bin/chsmack -a '_' /opt/var/kdb/.vconf_install_list
+
 # Copy initialized memory backend key
+/usr/bin/chsmack -a '_' /opt/var/kdb/memory_init/memory
+/usr/bin/chsmack -t /opt/var/kdb/memory_init/memory
 /bin/cp /opt/var/kdb/memory_init/memory/* /var/run/memory -r -p --preserve=all
 
-/usr/bin/chsmack -a 'system::vconf' /opt/var/kdb/db
+/usr/bin/chsmack -a '_' /opt/var/kdb/db
 /usr/bin/chsmack -t /opt/var/kdb/db
 
-/bin/touch /tmp/vconf-initialized
+/usr/bin/chsmack -a '_' /opt/var/kdb/file
+/usr/bin/chsmack -t /opt/var/kdb/file

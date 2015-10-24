@@ -30,35 +30,32 @@
 #include <sys/xattr.h>
 #include <ctype.h>
 #include <string.h>
+#include <execinfo.h>
+#include <dbus/dbus.h>
+#include <sys/time.h>
 
 #ifndef API
 #define API __attribute__ ((visibility("default")))
 #endif
 
-#define VCONF_ERROR_RETRY_CNT 5
+#define VCONF_ERROR_RETRY_CNT 7
 #define VCONF_ERROR_RETRY_SLEEP_UTIME 10000
 
-#define VCONF_NOT_INITIALIZED (access("/tmp/vconf-initialized", F_OK) == -1)
-
-#ifdef VCONF_USE_SQLFS_TRANSACTION
-int IN_SBOX=0;
-
-#define VCONF_MOUNT_PATH "/opt/var/kdb/db"
-#define VCONF_MOUNT_PATH_CHECK \
-do{\
-	if(!IN_SBOX) \
-      IN_SBOX = access("/opt/var/kdb/kdb_first_boot", F_OK) + 2; \
-   	if(2==IN_SBOX) return 0;\
-}while(0)
-
-__thread int is_transaction;
+#ifdef _APPFW_FEATURE_VCONF_MODULE_RESTORE_KEY
+#define VCONF_ERROR_RESTORE_SLEEP_UTIME 100000
+#define VCONF_RESTORE_REQUEST_PATH "/opt/var/kdb/.restore/"
+#define VCONF_DBUS_PATH "/vconf/dbus_handler"
+#define VCONF_DBUS_RESTORE_KEY_SVC_NAME "restore"
+#define VCONF_DBUS_RESTORE_KEY_INTERFACE "org.vconf.restore"
+#define VCONF_INSTALL_LIST "/opt/var/kdb/.vconf_install_list"
 #endif
-
-#define VCONF_LCK_FILE_FMT "%s/.%s.lck"
-#define LCK_FILE_GRP 5000
-
 static int g_posix_errno;
 static int g_vconf_errno;
+
+enum vconf_op_t {
+    VCONF_OP_GET = 0,
+    VCONF_OP_SET = 1
+};
 
 #ifdef VCONF_TIMECHECK
 double correction, startT;
@@ -89,6 +86,29 @@ int init_time(void)
 }
 #endif
 
+static void _vconf_print_call_stack()
+{
+	int j, nptrs;
+	void *buffer[100];
+	char **strings;
+
+	nptrs = backtrace(buffer, 100);
+	strings = backtrace_symbols(buffer, nptrs);
+	if (strings == NULL) {
+		SECURE_ERR("backtrace symbols null");
+		return;
+	}
+
+	SECURE_ERR("[ call stack %d addresses ]\n", nptrs);
+
+	if(nptrs > 6) nptrs = 6;
+
+	for (j = 0; j < nptrs; j++)
+		SECURE_ERR("%s\n", strings[j]);
+
+	free(strings);
+}
+
 int _vconf_keynode_set_keyname(keynode_t *keynode, const char *keyname)
 {
 	if (keynode->keyname) free(keynode->keyname);
@@ -96,6 +116,16 @@ int _vconf_keynode_set_keyname(keynode_t *keynode, const char *keyname)
 	retvm_if(keynode->keyname == NULL, VCONF_ERROR, "strndup Fails");
 	return VCONF_OK;
 }
+
+#ifdef VCONF_SUPPORT_ZONE
+int _vconf_keynode_set_zone(keynode_t *keynode, const char *zone_name)
+{
+    if (keynode->zone_name) free(keynode->zone_name);
+    keynode->zone_name = strndup(zone_name, VCONF_KEY_PATH_LEN);
+    retvm_if(keynode->zone_name == NULL, VCONF_ERROR, "strndup Fails");
+    return VCONF_OK;
+}
+#endif
 
 static inline void _vconf_keynode_set_dir(keynode_t *keynode)
 {
@@ -199,6 +229,16 @@ API char *vconf_keynode_get_name(keynode_t *keynode)
 
 	return keynode->keyname;
 }
+
+#ifdef VCONF_SUPPORT_ZONE
+API char *vconf_keynode_get_zone_name(keynode_t *keynode)
+{
+	retvm_if(keynode == NULL, NULL, "Invalid argument: keynode is NULL");
+	retvm_if(keynode->zone_name == NULL, NULL, "The name of zone_name is NULL");
+
+	return keynode->zone_name;
+}
+#endif
 
 /*
  * This function get value type of the keynode.
@@ -619,10 +659,10 @@ int _vconf_get_key_path(const char *keyname, char *path)
 	}
 
 #ifdef COMBINE_FOLDER
-	char convert_key[VCONF_KEY_PATH_LEN+1] = {0,};
+	char convert_key[VCONF_KEY_PATH_LEN] = {0,};
 	char *chrptr = NULL;
 
-	strncpy(convert_key, keyname, VCONF_KEY_PATH_LEN);
+	strncpy(convert_key, keyname, VCONF_KEY_PATH_LEN - 1);
 
 	chrptr = strchr((const char*)convert_key, (int)'/');
 	if(!chrptr) {
@@ -631,7 +671,7 @@ int _vconf_get_key_path(const char *keyname, char *path)
 	}
 	chrptr = strchr((const char*)chrptr+1, (int)'/');
 	while(chrptr) {
-		convert_key[chrptr-convert_key] = '+';
+		convert_key[chrptr-convert_key] = VCONF_CONVERSION_CHAR;
 		chrptr = strchr((const char*)chrptr+1, (int)'/');
 	}
 	key = (const char*)convert_key;
@@ -652,6 +692,51 @@ int _vconf_get_key_path(const char *keyname, char *path)
 
 	return VCONF_OK;
 }
+
+#ifdef VCONF_SUPPORT_ZONE
+int _vconf_get_key_path_zone(const char *keyname, char *path, const char *zone_name ){
+	const char *key = NULL;
+
+		if(!keyname) {
+			ERR("keyname is null");
+			return VCONF_ERROR_WRONG_PREFIX;
+		}
+
+	#ifdef COMBINE_FOLDER
+		char convert_key[VCONF_KEY_PATH_LEN] = {0,};
+		char *chrptr = NULL;
+
+		strncpy(convert_key, keyname, VCONF_KEY_PATH_LEN - 1);
+
+		chrptr = strchr((const char*)convert_key, (int)'/');
+		if(!chrptr) {
+			ERR("wrong key path!");
+			return VCONF_ERROR_WRONG_PREFIX;
+		}
+		chrptr = strchr((const char*)chrptr+1, (int)'/');
+		while(chrptr) {
+			convert_key[chrptr-convert_key] = VCONF_CONVERSION_CHAR;
+			chrptr = strchr((const char*)chrptr+1, (int)'/');
+		}
+		key = (const char*)convert_key;
+	#else
+		key = keyname;
+	#endif
+
+		if (strncmp(key, BACKEND_DB_PREFIX, sizeof(BACKEND_DB_PREFIX) - 1) == 0) {
+			snprintf(path, VCONF_KEY_PATH_LEN, "%s%s%s%s%s", ZONE_PREFIX_PATH, zone_name, ZONE_INFIX_PATH, BACKEND_SYSTEM_DIR, key);
+		} else if (0 == strncmp(key, BACKEND_FILE_PREFIX, sizeof(BACKEND_FILE_PREFIX) - 1)) {
+			snprintf(path, VCONF_KEY_PATH_LEN, "%s%s%s%s%s", ZONE_PREFIX_PATH, zone_name, ZONE_INFIX_PATH, BACKEND_SYSTEM_DIR, key);
+		} else if (0 == strncmp(key, BACKEND_MEMORY_PREFIX, sizeof(BACKEND_MEMORY_PREFIX) - 1)) {
+			snprintf(path, VCONF_KEY_PATH_LEN, "%s%s%s%s%s", ZONE_PREFIX_PATH, zone_name, ZONE_INFIX_PATH, ZONE_BACKEND_MEMORY_DIR, key);
+		} else {
+			ERR("Invalid argument: wrong prefix of key(%s)", key);
+			return VCONF_ERROR_WRONG_PREFIX;
+		}
+
+		return VCONF_OK;
+}
+#endif
 
 #ifdef VCONF_USE_BACKUP_TRANSACTION
 int _vconf_get_backup_path(const char *keyname, char *path)
@@ -730,8 +815,29 @@ static int _vconf_set_file_lock(int fd, short type)
 	l.l_whence = SEEK_SET;
 	l.l_len = 0;		/*Do it with whole file*/
 
-	return fcntl(fd, F_SETLKW, &l);
+	return fcntl(fd, F_SETLK, &l);
 }
+
+static int _vconf_get_pid_of_file_lock_owner(int fd, short type)
+{
+	struct flock l;
+
+	l.l_type = type;
+	l.l_start= 0;		/*Start at begin*/
+	l.l_whence = SEEK_SET;
+	l.l_len = 0;		/*Do it with whole file*/
+
+	if(fcntl(fd, F_GETLK, &l) < 0) {
+		WARN("error in getting lock info");
+		return -1;
+	}
+
+	if(l.l_type == F_UNLCK)
+		return 0;
+	else
+		return l.l_pid;
+}
+
 
 static int _vconf_set_read_lock(int fd)
 {
@@ -747,90 +853,6 @@ static int _vconf_set_unlock(int fd)
 {
 	return _vconf_set_file_lock(fd, F_UNLCK);
 }
-
-#ifdef VCONF_USE_SQLFS_TRANSACTION
-static void _vconf_acquire_transaction_delay(int ms)
-{
-    struct timeval timeout;
-    timeout.tv_sec = ms / 1000 ;
-    timeout.tv_usec = 1000 * ( ms % 1000 );
-
-    select(0, 0, 0, 0, &timeout);
-}
-
-static int _vconf_db_begin_transaction()
-{
-	pid_t value;
-	VCONF_MOUNT_PATH_CHECK;
-
-	if(is_transaction == 0) {
-		value = getpid();
-transaction_retry:
-		if(setxattr(VCONF_MOUNT_PATH, "full_db_transaction_start", &value, sizeof(value), 0) == -1)
-		{
-			//ERR("someone access vconf. retrying...(%d)", errno);
-			_vconf_acquire_transaction_delay(50);
-			goto transaction_retry;
-		} else {
-			is_transaction++;
-		}
-	} else {
-		is_transaction++;
-	}
-
-	return VCONF_OK;
-}
-
-static int _vconf_db_commit_transaction()
-{
-	pid_t value;
-	VCONF_MOUNT_PATH_CHECK;
-
-	retv_if(is_transaction <= 0, VCONF_ERROR);
-
-	if(is_transaction == 1) {
-		value = getpid();
-transaction_retry:
-		if(setxattr(VCONF_MOUNT_PATH, "full_db_transaction_stop", &value, sizeof(value), 0) == -1)
-		{
-			//ERR("setxattr failed. retrying...(%d)", errno);
-			_vconf_acquire_transaction_delay(50);
-			goto transaction_retry;
-		} else {
-			is_transaction = 0;
-		}
-	} else {
-		is_transaction--;
-	}
-
-	return 0;
-}
-
-static int _vconf_db_rollback_transaction()
-{
-	pid_t value;
-	VCONF_MOUNT_PATH_CHECK;
-
-	retv_if(is_transaction <= 0, VCONF_ERROR);
-
-	if(is_transaction == 1) {
-		value = getpid();
-transaction_retry:
-		if(setxattr(VCONF_MOUNT_PATH, "full_db_transaction_rb", &value, sizeof(value), 0) == -1)
-		{
-			//ERR("setxattr failed. retrying...(%d)", errno);
-			_vconf_acquire_transaction_delay(50);
-			goto transaction_retry;
-		} else {
-			is_transaction = 0;
-		}
-	} else {
-		is_transaction --;
-	}
-
-	return 0;
-}
-#endif //VCONF_USE_SQLFS_TRANSACTION
 
 #ifdef VCONF_USE_BACKUP_TRANSACTION
 
@@ -1052,6 +1074,302 @@ static int _vconf_backup_commit(char* backup_path)
 }
 #endif // VCONF_USE_BACKUP_TRANSACTION
 
+#ifdef _APPFW_FEATURE_VCONF_MODULE_RESTORE_KEY
+static int _vconf_send_restore_signal()
+{
+	DBusConnection *connection;
+	DBusMessage	*signal = NULL;
+	DBusError dbus_error;
+	dbus_uint32_t error = 0;
+	int func_ret = VCONF_OK;
+
+	dbus_error_init (&dbus_error);
+	connection = dbus_bus_get_private(DBUS_BUS_SYSTEM, &dbus_error);
+	if (dbus_error_is_set(&dbus_error)) {
+		ERR("dbus_bus_get error: %s", dbus_error.message);
+		dbus_error_free (&dbus_error);
+		return VCONF_ERROR;
+	}
+	if (connection == NULL) {
+		ERR("dbus connection is NULL");
+		return VCONF_ERROR;
+	}
+
+	signal = dbus_message_new_signal(
+		VCONF_DBUS_PATH,
+		VCONF_DBUS_RESTORE_KEY_INTERFACE,
+		VCONF_DBUS_RESTORE_KEY_SVC_NAME);
+    if (signal == NULL) {
+            ERR("dbus new signal is NULL");
+            func_ret = VCONF_ERROR;
+			goto out_return;
+    }
+
+	dbus_message_set_destination(signal, VCONF_DBUS_RESTORE_KEY_INTERFACE);
+
+	if (!dbus_connection_send(connection, signal, &error)) {
+			ERR("dbus_connection_send failed: %d", error);
+			func_ret = VCONF_ERROR;
+			goto out_return;
+	} else {
+		WARN("key restore dbus send ok");
+	}
+	dbus_connection_flush(connection);
+
+out_return :
+	if(signal)
+		dbus_message_unref(signal);
+
+	dbus_connection_close(connection);
+	dbus_connection_unref(connection);
+
+	return func_ret;
+}
+
+static int _vconf_check_install_key_list(const char *key)
+{
+	FILE *fp = NULL;
+	char file_buf[BUF_LEN] = {0,};
+	int ret = -1;
+
+	ERR("key : %s", key);
+
+	if(!key) return -1;
+
+	if( (fp = fopen(VCONF_INSTALL_LIST, "r")) == NULL ) {
+		ERR("failed(%d) to open vconf install list", errno);
+		return ret;
+	}
+
+	while(fgets(file_buf, sizeof(file_buf), fp))
+	{
+		if(strncmp(file_buf,key,strlen(key)) == 0) {
+			ret = 0;
+			break;
+		}
+	}
+
+	if (fp)
+		fclose(fp);
+
+	return ret;
+}
+
+static int _vconf_restore_key(const char* key)
+{
+	FILE *fp = NULL;
+	int func_ret = VCONF_OK;
+	int ret = 0;
+	struct timeval tv;
+
+	char restore_reqeust_file[VCONF_KEY_PATH_LEN] = {0,};
+
+	if(!key) {
+		ERR("key is null");
+		return VCONF_ERROR;
+	}
+
+	if(_vconf_check_install_key_list(key) != 0) {
+		WARN("key(%s) does not exist originally", key);
+		return VCONF_ERROR;
+	}
+
+	char full_key_path[VCONF_KEY_PATH_LEN] = {0,};
+	ret = _vconf_get_key_path(key, full_key_path);
+	if(ret != VCONF_OK) {
+		ERR("_vconf_get_key_path error(%d)", ret);
+		return VCONF_ERROR;
+	}
+
+	gettimeofday(&tv, NULL);
+
+	snprintf(restore_reqeust_file, VCONF_KEY_PATH_LEN, "%s%d_%ld_%ld",
+		VCONF_RESTORE_REQUEST_PATH, getpid(), tv.tv_sec, tv.tv_usec);
+
+	if( (fp = fopen(restore_reqeust_file, "w")) == NULL ) {
+		ERR("restore request file open error(%d)", errno);
+		func_ret = VCONF_ERROR;
+		goto out_return;
+	}
+
+	ret = fprintf(fp,"%s",full_key_path);
+	if(ret < strlen(full_key_path)) {
+		ERR("key path write error(%d)", errno);
+		func_ret = VCONF_ERROR;
+		goto out_return;
+	}
+
+	fflush(fp);
+	ret = fdatasync(fileno(fp));
+	if(ret == -1) {
+		ERR("fdatasync error(%d)", errno);
+		func_ret = VCONF_ERROR;
+		goto out_return;
+	}
+
+	fclose(fp);
+	fp = NULL;
+
+	DBG("restore request file(%s) is created", restore_reqeust_file);
+
+	ret = _vconf_send_restore_signal();
+	if(ret != VCONF_OK) {
+		ERR("send restore signal error(%d)", ret);
+		func_ret = VCONF_ERROR;
+	}
+
+out_return :
+	if(fp) fclose(fp);
+	return func_ret;
+}
+#endif
+
+static void _vconf_check_noent_err_assert()
+{
+	_vconf_print_call_stack();
+
+#if 0
+	if(getuid() == 0) {
+		ERR("vconf key does not exist. wrong use case. Plz fix asap");
+		return;
+	}
+#endif
+
+	FATAL("vconf key does not exist. wrong use case. Assert!");
+}
+
+static int _vconf_check_retry_err(keynode_t *keynode, int vconf_errno, int io_errno, int op_type)
+{
+	int is_busy_err = 0;
+
+	if (vconf_errno == VCONF_ERROR_FILE_OPEN)
+	{
+		switch (io_errno)
+		{
+			case ENOENT :
+			{
+#ifdef VCONF_CHECK_NOENT_ERR
+	#ifdef VCONF_CHECK_NOENT_ERR_ASSERT
+				_vconf_check_noent_err_assert();
+	#endif
+				break;
+#endif
+			/* file is not exist, make path */
+#ifndef DISABLE_RUNTIME_KEY_CREATION
+				if(op_type == VCONF_OP_SET)
+				{
+					int rc = 0;
+					char path[VCONF_KEY_PATH_LEN] = {0,};
+					rc = _vconf_get_key_path(keynode->keyname, path);
+					if (rc != VCONF_OK) {
+						ERR("_vconf_get_key_path error");
+						break;
+					}
+
+					vconf_errno = _vconf_set_key_check_parent_dir(path);
+					if (rc != VCONF_OK) {
+						ERR("_vconf_set_key_check_parent_dir error : %s", path);
+						break;
+					}
+
+					vconf_errno = _vconf_set_key_creation(path);
+					if (rc != VCONF_OK) {
+						ERR("_vconf_set_key_creation error : %s", path);
+						break;
+					}
+					INFO("%s key is created", keynode->keyname);
+
+					is_busy_err = 1;
+				}
+				break;
+#endif
+
+#ifdef _APPFW_FEATURE_VCONF_MODULE_RESTORE_KEY
+				int rc = 0;
+				rc = _vconf_restore_key(keynode->keyname);
+				if(rc == VCONF_OK) {
+					WARN("vconf key does not exist. key will be restored.");
+                    usleep(VCONF_ERROR_RESTORE_SLEEP_UTIME);
+					is_busy_err = 1;
+				}
+				break;
+#endif
+
+				break;
+			}
+			case EAGAIN :
+			case EMFILE :
+			case ENFILE :
+			case ETXTBSY :
+			{
+				is_busy_err = 1;
+			}
+		}
+	}
+	else if (vconf_errno == VCONF_ERROR_FILE_CHMOD)
+	{
+		switch (io_errno)
+		{
+			case EINTR :
+			case EBADF :
+			{
+				is_busy_err = 1;
+			}
+		}
+	}
+	else if (vconf_errno == VCONF_ERROR_FILE_LOCK)
+	{
+		switch (io_errno)
+		{
+			case EBADF :
+			case EAGAIN :
+			case ENOLCK :
+			{
+				is_busy_err = 1;
+			}
+		}
+	}
+	else if (vconf_errno == VCONF_ERROR_FILE_WRITE)
+	{
+		switch (io_errno)
+		{
+			case 0 :
+			case EAGAIN :
+			case EINTR :
+			case EIO :
+			case ENOMEM :
+			{
+				is_busy_err = 1;
+			}
+		}
+	}
+	else if (vconf_errno == VCONF_ERROR_FILE_FREAD)
+	{
+		switch (io_errno)
+		{
+			case EAGAIN :
+			case EINTR :
+			case EIO :
+			{
+				is_busy_err = 1;
+			}
+		}
+	}
+	else
+	{
+		is_busy_err = 0;
+	}
+
+	if (is_busy_err == 1) {
+		return 1;
+	}
+	else
+	{
+		ERR("%s : check retry err (%d/%d).",keynode->keyname, vconf_errno, io_errno);
+		return 0;
+	}
+}
+
 static int _vconf_set_key_filesys(keynode_t *keynode, int prefix, int *io_errno)
 {
 	char path[VCONF_KEY_PATH_LEN] = {0,};
@@ -1061,6 +1379,7 @@ static int _vconf_set_key_filesys(keynode_t *keynode, int prefix, int *io_errno)
 	int err_no = 0;
 	char err_buf[100] = { 0, };
 	int is_write_error = 0;
+	int retry_cnt = 0;
 
 #ifdef VCONF_USE_BACKUP_TRANSACTION
 	char backup_path[VCONF_KEY_PATH_LEN] = {0,};
@@ -1068,24 +1387,22 @@ static int _vconf_set_key_filesys(keynode_t *keynode, int prefix, int *io_errno)
 	int file_size = 0;
 #endif
 
-#ifdef VCONF_USE_LOCK_FILE
-	char tmp[VCONF_KEY_PATH_LEN] = {0,};
-	char lck[VCONF_KEY_PATH_LEN] = {0,};
-	char *pCh;
-	FILE *lckfp = NULL;
-#endif
-
+retry_open :
 	errno = 0;
+	err_no = 0;
+	func_ret = VCONF_OK;
 
-	ret = _vconf_get_key_path(keynode->keyname, path);
-	retv_if(ret != VCONF_OK, ret);
-
-#ifdef VCONF_CHECK_IS_INITIALIZED
-	if(prefix == VCONF_BACKEND_MEMORY && VCONF_NOT_INITIALIZED) {
-		func_ret = VCONF_ERROR_NOT_INITIALIZED;
-		goto out_return;
+#ifdef VCONF_SUPPORT_ZONE
+	if(keynode->zone_name == NULL){
+		ret = _vconf_get_key_path(keynode->keyname, path);
+	} else {
+		ret = _vconf_get_key_path_zone(keynode->keyname, path, keynode->zone_name);
 	}
+#else
+	ret = _vconf_get_key_path(keynode->keyname, path);
 #endif
+
+	retv_if(ret != VCONF_OK, ret);
 
 #ifdef VCONF_USE_BACKUP_TRANSACTION
 	if(prefix == VCONF_BACKEND_DB && keynode->type == VCONF_TYPE_STRING) {
@@ -1105,49 +1422,19 @@ static int _vconf_set_key_filesys(keynode_t *keynode, int prefix, int *io_errno)
 		goto out_return;
 	}
 
-#ifdef VCONF_USE_SQLFS_TRANSACTION
-	if (prefix != VCONF_BACKEND_DB)
-#endif
-	{
-#ifdef VCONF_USE_LOCK_FILE
-		pCh = strrchr(path, '/');
-		strncat(tmp, path, pCh - path);
-		snprintf(lck, VCONF_KEY_PATH_LEN, VCONF_LCK_FILE_FMT, tmp, pCh+1);
+retry :
+	errno = 0;
+	err_no = 0;
+	func_ret = VCONF_OK;
 
-#ifndef DISABLE_RUNTIME_KEY_CREATION
-		int exists = 1;
-		if(access(lck, F_OK) == -1) exists = 0;
-#endif
-
-		if( (lckfp = fopen(lck, "w+")) == NULL ) {
-			func_ret = VCONF_ERROR_FILE_OPEN;
-			err_no = errno;
-			goto out_close;
-		}
-
-#ifndef DISABLE_RUNTIME_KEY_CREATION
-		if(exists == 0) {
-			if (fchmod(fileno(lckfp), S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP|S_IROTH|S_IWOTH) == -1) {
-				func_ret = VCONF_ERROR_FILE_CHMOD;
-				err_no = errno;
-				goto out_close;
-			}
-			if (fchown(fileno(lckfp), 0, LCK_FILE_GRP) == -1) {
-				func_ret = VCONF_ERROR_FILE_CHMOD;
-				err_no = errno;
-				goto out_close;
-			}
-		}
-#endif
-		ret = _vconf_set_write_lock(fileno(lckfp));
-#else
-		ret = _vconf_set_write_lock(fileno(fp));
-#endif
-		if(ret == -1) {
-			func_ret = VCONF_ERROR_FILE_LOCK;
-			err_no = errno;
-			goto out_close;
-		}
+	ret = _vconf_set_write_lock(fileno(fp));
+	if(ret == -1) {
+		func_ret = VCONF_ERROR_FILE_LOCK;
+		err_no = errno;
+		ERR("file(%s) lock owner(%d)",
+			keynode->keyname,
+			_vconf_get_pid_of_file_lock_owner(fileno(fp), F_WRLCK));
+		goto out_return;
 	}
 
 #ifdef VCONF_USE_BACKUP_TRANSACTION
@@ -1167,21 +1454,15 @@ static int _vconf_set_key_filesys(keynode_t *keynode, int prefix, int *io_errno)
 	}
 #endif
 
-	if (ftruncate(fileno(fp), 0) == -1) {
-		func_ret = VCONF_ERROR_FILE_TRUNCATE;
-		err_no = errno;
-		goto out_unlock;
-	}
-
 	/* write key type */
 	ret = fwrite((void *)&(keynode->type), sizeof(int), 1, fp);
 	if(ret <= 0)
 	{
-		if(errno) {
-			err_no = errno;
-		} else {
+		if(!errno) {
+			ERR("number of written items is 0. try again");
 			errno = EAGAIN;
 		}
+		err_no = errno;
 		func_ret = VCONF_ERROR_FILE_WRITE;
 		goto out_unlock;
 	}
@@ -1203,8 +1484,11 @@ static int _vconf_set_key_filesys(keynode_t *keynode, int prefix, int *io_errno)
 			break;
 		case VCONF_TYPE_STRING:
 			ret = fprintf(fp,"%s",keynode->value.s);
-			if(ret < strlen(keynode->value.s)) is_write_error = 1;
 			//ret = fwrite((void *)keynode->value.s, sizeof(char), strlen(keynode->value.s), fp);
+			if(ret < strlen(keynode->value.s)) is_write_error = 1;
+			if (ftruncate(fileno(fp), ret) == -1) {
+				is_write_error = 1;
+			}
 			break;
 		default :
 			func_ret = VCONF_ERROR_WRONG_TYPE;
@@ -1212,28 +1496,18 @@ static int _vconf_set_key_filesys(keynode_t *keynode, int prefix, int *io_errno)
 	}
 	if(is_write_error)
 	{
-		if(errno) {
-			err_no = errno;
-		} else {
+		if(!errno) {
+			ERR("number of written items is 0. try again");
 			errno = EAGAIN;
 		}
+		err_no = errno;
 		func_ret = VCONF_ERROR_FILE_WRITE;
 		goto out_unlock;
 	}
 
-#ifdef VCONF_USE_SQLFS_TRANSACTION
-	if(prefix == VCONF_BACKEND_FILE)
-#else
 	if(prefix == VCONF_BACKEND_FILE || prefix == VCONF_BACKEND_DB)
-#endif
 	{
 		fflush(fp);
-
-		ret = fdatasync(fileno(fp));
-		if(ret == -1) {
-			err_no = errno;
-			func_ret = VCONF_ERROR_FILE_SYNC;
-		}
 	}
 
 #ifdef VCONF_USE_BACKUP_TRANSACTION
@@ -1248,33 +1522,78 @@ static int _vconf_set_key_filesys(keynode_t *keynode, int prefix, int *io_errno)
 #endif
 
 out_unlock :
-#ifdef VCONF_USE_SQLFS_TRANSACTION
-	if (prefix != VCONF_BACKEND_DB)
-#endif
-	{
-#ifdef VCONF_USE_LOCK_FILE
-		ret = _vconf_set_unlock(fileno(lckfp));
-#else
-		ret = _vconf_set_unlock(fileno(fp));
-#endif
-		if(ret == -1) {
-			func_ret = VCONF_ERROR_FILE_LOCK;
-			err_no = errno;
-			goto out_close;
-		}
+	ret = _vconf_set_unlock(fileno(fp));
+	if(ret == -1) {
+		func_ret = VCONF_ERROR_FILE_LOCK;
+		err_no = errno;
+		goto out_return;
 	}
-out_close :
-	fclose(fp);
-#ifdef VCONF_USE_LOCK_FILE
-	if(lckfp) fclose(lckfp);
-#endif
 
 out_return :
-	if(err_no != 0) {
+	if (func_ret != VCONF_OK)
+	{
+#ifdef _APPFW_FEATURE_VCONF_MODULE_RESTORE_KEY
+		if((func_ret == VCONF_ERROR_FILE_OPEN) &&
+			(err_no == ENOENT))
+		{
+			if(retry_cnt > VCONF_ERROR_RETRY_CNT)
+			{
+				ERR("vconf key(%s) does not exist and key restoration is not completed.",keynode->keyname);
+				goto out_func;
+			} else if(retry_cnt > 0) {
+				ERR("key(%s) restoration is not completed. retry cnt(%d)",keynode->keyname, retry_cnt);
+				retry_cnt++;
+				usleep(VCONF_ERROR_RETRY_SLEEP_UTIME*4);
+				goto retry_open;
+			}
+		}
+#endif
 		strerror_r(err_no, err_buf, 100);
-		ERR("_vconf_set_key_filesys(%d-%s) step(%d) failed(%d / %s)\n", keynode->type, keynode->keyname, func_ret, err_no, err_buf);
+		if (_vconf_check_retry_err(keynode, func_ret, err_no, VCONF_OP_SET))
+		{
+			if (retry_cnt < VCONF_ERROR_RETRY_CNT)
+			{
+				WARN("_vconf_set_key_filesys(%d-%s) step(%d) failed(%d / %s) retry(%d)", keynode->type, keynode->keyname, func_ret, err_no, err_buf, retry_cnt);
+				retry_cnt++;
+				usleep((retry_cnt)*VCONF_ERROR_RETRY_SLEEP_UTIME);
+
+				if (fp)
+					goto retry;
+				else
+					goto retry_open;
+			}
+			else
+			{
+				ERR("_vconf_set_key_filesys(%d-%s) step(%d) faild(%d / %s) over the retry count.",
+					keynode->type, keynode->keyname, func_ret, err_no, err_buf);
+			}
+		}
+		else
+		{
+			ERR("_vconf_set_key_filesys(%d-%s) step(%d) failed(%d / %s)\n", keynode->type, keynode->keyname, func_ret, err_no, err_buf);
+		}
+	} else {
+		if(retry_cnt > 0) {
+			DBG("_vconf_set_key_filesys ok with retry cnt(%d)", retry_cnt);
+		}
 	}
 
+out_func :
+	if (fp)
+	{
+		if(func_ret == VCONF_OK)
+		{
+			if(prefix == VCONF_BACKEND_FILE || prefix == VCONF_BACKEND_DB)
+			{
+				ret = fdatasync(fileno(fp));
+				if(ret == -1) {
+					err_no = errno;
+					func_ret = VCONF_ERROR_FILE_SYNC;
+				}
+			}
+		}
+		fclose(fp);
+	}
 	*io_errno = err_no;
 
 	return func_ret;
@@ -1282,152 +1601,29 @@ out_return :
 
 static int _vconf_set_key(keynode_t *keynode)
 {
-	int func_ret = VCONF_OK;
 	int ret = 0;
-	int is_busy_err = 0;
-	int retry = -1;
 	int prefix = 0;
 	int io_errno = 0;
+	char err_buf[100] = { 0, };
 
 	ret = _vconf_get_key_prefix(keynode->keyname, &prefix);
 	retv_if(ret != VCONF_OK, ret);
 
-#ifdef VCONF_USE_SQLFS_TRANSACTION
-	if(prefix == VCONF_BACKEND_DB) {
-		_vconf_db_begin_transaction();
-	}
-#endif
-
-	while((ret = _vconf_set_key_filesys(keynode, prefix, &io_errno)) != VCONF_OK)
+	ret = _vconf_set_key_filesys(keynode, prefix, &io_errno);
+	if (ret == VCONF_OK)
 	{
-		is_busy_err = 0;
-		retry++;
-
-		g_posix_errno = io_errno;
-		g_vconf_errno = ret;
-
-#ifdef VCONF_CHECK_INITIALIZED
-		if(VCONF_NOT_INITIALIZED)
-		{
-			ERR("%s : vconf is not initialized\n", keynode->keyname);
-			is_busy_err = 1;
-		}
-		else if(ret == VCONF_ERROR_FILE_OPEN)
-#else
-
-		if(ret == VCONF_ERROR_FILE_OPEN)
-#endif
-		{
-			switch (io_errno)
-			{
-				/* file is not exist, make path */
-#ifndef DISABLE_RUNTIME_KEY_CREATION
-				case EFAULT :
-				case ENOENT :
-				{
-					int rc = 0;
-					char path[VCONF_KEY_PATH_LEN] = {0,};
-					rc = _vconf_get_key_path(keynode->keyname, path);
-					if(rc != VCONF_OK) {
-						ERR("_vconf_get_key_path error");
-						break;
-					}
-
-					ret = _vconf_set_key_check_parent_dir(path);
-					if(rc != VCONF_OK) {
-						ERR("_vconf_set_key_check_parent_dir error : %s", path);
-						break;
-					}
-
-					ret = _vconf_set_key_creation(path);
-					if(rc != VCONF_OK) {
-						ERR("_vconf_set_key_creation error : %s", path);
-						break;
-					}
-					INFO("%s key is created", keynode->keyname);
-				}
-#endif
-				case EAGAIN :
-				case EMFILE :
-				case ENFILE :
-				case ETXTBSY :
-				{
-					is_busy_err = 1;
-				}
-			}
-		}
-		else if (ret == VCONF_ERROR_FILE_CHMOD)
-		{
-			switch (io_errno)
-			{
-				case EINTR :
-				case EBADF :
-				{
-					is_busy_err = 1;
-				}
-			}
-		}
-		else if (ret == VCONF_ERROR_FILE_LOCK)
-		{
-			switch (io_errno)
-			{
-				case EBADF :
-				case EAGAIN :
-				case ENOLCK :
-				{
-					is_busy_err = 1;
-				}
-			}
-		}
-		else if (ret == VCONF_ERROR_FILE_WRITE)
-		{
-			switch (io_errno)
-			{
-				case 0 :
-				case EAGAIN :
-				case EINTR :
-				case EIO :
-				case ENOMEM :
-				{
-					is_busy_err = 1;
-				}
-			}
-		}
-		else
-		{
-			is_busy_err = 0;
-		}
-
-		if ((is_busy_err == 1) && (retry < VCONF_ERROR_RETRY_CNT)) {
-			WARN("%s : write buf error(%d/%d). write will be retried(%d) , usleep time : %d\n",
-				keynode->keyname, ret, io_errno,
-				retry, (retry)*VCONF_ERROR_RETRY_SLEEP_UTIME);
-			usleep((retry)*VCONF_ERROR_RETRY_SLEEP_UTIME);
-			continue;
-		} else {
-			ERR("%s : write buf error(%d/%d). break. (%d)\n",
-				keynode->keyname, ret, io_errno, retry);
-			func_ret = VCONF_ERROR;
-			break;
-		}
-	}
-
-	if(ret == VCONF_OK) {
 		g_posix_errno = VCONF_OK;
 		g_vconf_errno = VCONF_OK;
 	}
-
-#ifdef VCONF_USE_SQLFS_TRANSACTION
-	if(prefix == VCONF_BACKEND_DB) {
-		if(func_ret == VCONF_ERROR) {
-			_vconf_db_rollback_transaction();
-		} else {
-			_vconf_db_commit_transaction();
-		}
+	else
+	{
+		strerror_r(io_errno, err_buf, 100);
+		ERR("_vconf_set_key(%s) step(%d) failed(%d / %s)", keynode->keyname, ret, io_errno, err_buf);
+		g_posix_errno = io_errno;
+		g_vconf_errno = ret;
 	}
-#endif
 
-	return func_ret;
+	return ret;
 }
 
 /*
@@ -1456,12 +1652,6 @@ API int vconf_set(keylist_t *keylist)
 	ret = _vconf_get_key_prefix(got_node->keyname, &prefix);
 	retv_if(ret != VCONF_OK, ret);
 
-#ifdef VCONF_USE_SQLFS_TRANSACTION
-	if(prefix == VCONF_BACKEND_DB) {
-		_vconf_db_begin_transaction();
-	}
-#endif
-
 	while (got_node != NULL) {
 		ret = _vconf_set_key(got_node);
 		if(ret != VCONF_OK) {
@@ -1470,16 +1660,6 @@ API int vconf_set(keylist_t *keylist)
 
 		got_node = _vconf_keynode_next(got_node);
 	}
-
-#ifdef VCONF_USE_SQLFS_TRANSACTION
-	if(prefix == VCONF_BACKEND_DB) {
-		if(func_ret == VCONF_ERROR) {
-			_vconf_db_rollback_transaction();
-		} else {
-			_vconf_db_commit_transaction();
-		}
-	}
-#endif
 
 	END_TIME_CHECK
 
@@ -1547,6 +1727,49 @@ API int vconf_set_int(const char *in_key, const int intval)
 	return func_ret;
 }
 
+#ifdef VCONF_SUPPORT_ZONE
+API int vconf_set_int_zone(const char *in_key, const int intval, const char *zone_name)
+{
+	START_TIME_CHECK
+
+	retvm_if(in_key == NULL, VCONF_ERROR, "Invalid argument: key is NULL");
+
+	int func_ret = VCONF_OK;
+
+	keynode_t* pKeyNode = _vconf_keynode_new();
+	retvm_if(pKeyNode == NULL, VCONF_ERROR, "key malloc fail");
+
+	func_ret = _vconf_keynode_set_keyname(pKeyNode, in_key);
+	if(func_ret != VCONF_OK) {
+		_vconf_keynode_free(pKeyNode);
+		ERR("set key name error");
+		return VCONF_ERROR;
+	}
+
+	func_ret = _vconf_keynode_set_zone(pKeyNode, zone_name);
+	if(func_ret != VCONF_OK) {
+		_vconf_keynode_free(pKeyNode);
+		ERR("set zone name error");
+		return VCONF_ERROR;
+	}
+
+	_vconf_keynode_set_value_int(pKeyNode, intval);
+
+	if (_vconf_set_key(pKeyNode) != VCONF_OK) {
+		ERR("vconf_set_int(%d) : %s(%d) error", getpid(), in_key, intval);
+		func_ret = VCONF_ERROR;
+	} else{
+		INFO("%s(%d) success", in_key, intval);
+	}
+
+	_vconf_keynode_free(pKeyNode);
+
+	END_TIME_CHECK
+
+	return func_ret;
+}
+#endif
+
 /*
 * This function set the boolean value of given key
 * @param[in]	in_key	key
@@ -1586,6 +1809,48 @@ API int vconf_set_bool(const char *in_key, const int boolval)
 	return func_ret;
 }
 
+#ifdef VCONF_SUPPORT_ZONE
+API int vconf_set_bool_zone(const char *in_key, const int boolval, const char *zone_name)
+{
+	START_TIME_CHECK
+
+	retvm_if(in_key == NULL, VCONF_ERROR, "Invalid argument: key is NULL");
+
+	int func_ret = VCONF_OK;
+	keynode_t* pKeyNode = _vconf_keynode_new();
+	retvm_if(pKeyNode == NULL, VCONF_ERROR, "key malloc fail");
+
+	func_ret = _vconf_keynode_set_keyname(pKeyNode, in_key);
+	if(func_ret != VCONF_OK) {
+		_vconf_keynode_free(pKeyNode);
+		ERR("set key name error");
+		return VCONF_ERROR;
+	}
+
+	func_ret = _vconf_keynode_set_zone(pKeyNode, zone_name);
+	if(func_ret != VCONF_OK) {
+		_vconf_keynode_free(pKeyNode);
+		ERR("set zone name error");
+		return VCONF_ERROR;
+	}
+
+	_vconf_keynode_set_value_bool(pKeyNode, boolval);
+
+	if (_vconf_set_key(pKeyNode) != VCONF_OK) {
+		ERR("vconf_set_bool(%d) : %s(%d) error", getpid(), in_key, boolval);
+		func_ret = VCONF_ERROR;
+	} else {
+		INFO("%s(%d) success", in_key, boolval);
+	}
+
+	_vconf_keynode_free(pKeyNode);
+
+	END_TIME_CHECK
+
+	return func_ret;
+}
+#endif
+
 /*
  * This function set the double value of given key
  * @param[in]	in_key	key
@@ -1623,6 +1888,48 @@ API int vconf_set_dbl(const char *in_key, const double dblval)
 
 	return func_ret;
 }
+
+#ifdef VCONF_SUPPORT_ZONE
+API int vconf_set_dbl_zone(const char *in_key, const double dblval, const char *zone_name)
+{
+	START_TIME_CHECK
+
+	retvm_if(in_key == NULL, VCONF_ERROR, "Invalid argument: key is NULL");
+
+	int func_ret = VCONF_OK;
+	keynode_t* pKeyNode = _vconf_keynode_new();
+	retvm_if(pKeyNode == NULL, VCONF_ERROR, "key malloc fail");
+
+	func_ret = _vconf_keynode_set_keyname(pKeyNode, in_key);
+	if(func_ret != VCONF_OK) {
+		_vconf_keynode_free(pKeyNode);
+		ERR("set key name error");
+		return VCONF_ERROR;
+	}
+
+	func_ret = _vconf_keynode_set_zone(pKeyNode, zone_name);
+		if(func_ret != VCONF_OK) {
+			_vconf_keynode_free(pKeyNode);
+			ERR("set zone name error");
+			return VCONF_ERROR;
+	}
+
+	_vconf_keynode_set_value_dbl(pKeyNode, dblval);
+
+	if (_vconf_set_key(pKeyNode) != VCONF_OK) {
+		ERR("vconf_set_dbl(%d) : %s(%f) error", getpid(), in_key, dblval);
+		func_ret = VCONF_ERROR;
+	} else {
+		INFO("%s(%f) success", in_key, dblval);
+	}
+
+	_vconf_keynode_free(pKeyNode);
+
+	END_TIME_CHECK
+
+	return func_ret;
+}
+#endif
 
 /*
  * This function set the string value of given key
@@ -1662,6 +1969,49 @@ API int vconf_set_str(const char *in_key, const char *strval)
 
 	return func_ret;
 }
+
+#ifdef VCONF_SUPPORT_ZONE
+API int vconf_set_str_zone(const char *in_key, const char *strval, const char *zone_name)
+{
+	START_TIME_CHECK
+
+	retvm_if(in_key == NULL, VCONF_ERROR, "Invalid argument: key is NULL");
+	retvm_if(strval == NULL, VCONF_ERROR, "Invalid argument: value is NULL");
+
+	int func_ret = VCONF_OK;
+	keynode_t* pKeyNode = _vconf_keynode_new();
+	retvm_if(pKeyNode == NULL, VCONF_ERROR, "key malloc fail");
+
+	func_ret = _vconf_keynode_set_keyname(pKeyNode, in_key);
+	if(func_ret != VCONF_OK) {
+		_vconf_keynode_free(pKeyNode);
+		ERR("set key name error");
+		return VCONF_ERROR;
+	}
+
+	func_ret = _vconf_keynode_set_zone(pKeyNode, zone_name);
+		if(func_ret != VCONF_OK) {
+			_vconf_keynode_free(pKeyNode);
+			ERR("set zone name error");
+			return VCONF_ERROR;
+	}
+
+	_vconf_keynode_set_value_str(pKeyNode, strval);
+
+	if (_vconf_set_key(pKeyNode) != VCONF_OK) {
+		ERR("vconf_set_str_zone(%d) : %s(%s) error", getpid(), in_key, strval);
+		func_ret = VCONF_ERROR;
+	} else {
+		INFO("%s(%s) success", in_key, strval);
+	}
+
+	_vconf_keynode_free(pKeyNode);
+
+	END_TIME_CHECK
+
+	return func_ret;
+}
+#endif
 
 
 #ifdef SUPPORT_ELEKTRA_VALUE_FORMAT
@@ -1801,30 +2151,27 @@ static int _vconf_get_key_filesys(keynode_t *keynode, int prefix, int* io_errno)
 	int err_no = 0;
 	int type = 0;
 	FILE *fp = NULL;
+	int retry_cnt = 0;
+	int read_size = 0;
 
 #ifdef VCONF_USE_BACKUP_TRANSACTION
 	char backup_path[VCONF_KEY_PATH_LEN] = {0,};
 #endif
 
-#ifdef VCONF_USE_LOCK_FILE
-	char tmp[VCONF_KEY_PATH_LEN] = {0,};
-	char lck[VCONF_KEY_PATH_LEN] = {0,};
-	char *pCh;
-	FILE *lckfp = NULL;
-#endif
-
+retry_open :
 	errno = 0;
+	func_ret = VCONF_OK;
 
-	ret = _vconf_get_key_path(keynode->keyname, path);
-	retv_if(ret != VCONF_OK, ret);
-
-#ifdef VCONF_CHECK_INITIALIZED
-	if(prefix == VCONF_BACKEND_MEMORY && VCONF_NOT_INITIALIZED)
-	{
-		func_ret = VCONF_ERROR_NOT_INITIALIZED;
-		goto out_return;
+#ifdef VCONF_SUPPORT_ZONE
+	if(keynode->zone_name == NULL){
+		ret = _vconf_get_key_path(keynode->keyname, path);
+	} else {
+		ret = _vconf_get_key_path_zone(keynode->keyname, path, keynode->zone_name);
 	}
+#else
+	ret = _vconf_get_key_path(keynode->keyname, path);
 #endif
+	retv_if(ret != VCONF_OK, ret);
 
 #ifdef VCONF_USE_BACKUP_TRANSACTION
 	if(prefix == VCONF_BACKEND_DB) {
@@ -1844,37 +2191,26 @@ static int _vconf_get_key_filesys(keynode_t *keynode, int prefix, int* io_errno)
 		goto out_return;
 	}
 
-#ifdef VCONF_USE_SQLFS_TRANSACTION
-	if (prefix != VCONF_BACKEND_DB)
-#endif
-	{
-#ifdef VCONF_USE_LOCK_FILE
-		pCh = strrchr(path, '/');
-		strncat(tmp, path, pCh - path);
-		snprintf(lck, VCONF_KEY_PATH_LEN, VCONF_LCK_FILE_FMT, tmp, pCh+1);
-		if( (lckfp = fopen(lck, "r")) == NULL ) {
-			func_ret = VCONF_ERROR_FILE_OPEN;
-			err_no = errno;
-			goto out_close;
-		}
-		ret = _vconf_set_read_lock(fileno(lckfp));
-#else
-		ret = _vconf_set_read_lock(fileno(fp));
-#endif
-		if(ret == -1) {
-			func_ret = VCONF_ERROR_FILE_LOCK;
-			err_no = errno;
-			goto out_close;
-		}
+retry :
+	err_no = 0;
+	func_ret = VCONF_OK;
+
+	ret = _vconf_set_read_lock(fileno(fp));
+	if(ret == -1) {
+		func_ret = VCONF_ERROR_FILE_LOCK;
+		err_no = errno;
+		goto out_return;
 	}
 
+
 	/* read data type */
-	if(!fread((void*)&type, sizeof(int), 1, fp)) {
-		if(ferror(fp)) {
-			err_no = errno;
-		} else {
-			errno = EAGAIN;
+	read_size = fread((void*)&type, sizeof(int), 1, fp);
+	if((read_size <= 0) || (read_size > sizeof(int))) {
+		if(!ferror(fp)) {
+			ERR("number of read items for type is 0 with false ferror. err : %d", errno);
+			errno = ENODATA;
 		}
+		err_no = errno;
 		func_ret = VCONF_ERROR_FILE_FREAD;
 		goto out_unlock;
 	}
@@ -1885,14 +2221,12 @@ static int _vconf_get_key_filesys(keynode_t *keynode, int prefix, int* io_errno)
 		case VCONF_TYPE_INT:
 		{
 			int value_int = 0;
-			int read_size = 0;
 			read_size = fread((void*)&value_int, sizeof(int), 1, fp);
 			if((read_size <= 0) || (read_size > sizeof(int))) {
-				if(ferror(fp)) {
-					err_no = errno;
-				} else {
-					errno = EAGAIN;
+				if(!ferror(fp)) {
+					ERR("number of read items for value is wrong. err : %d", errno);
 				}
+				err_no = errno;
 				func_ret = VCONF_ERROR_FILE_FREAD;
 				goto out_unlock;
 			} else {
@@ -1904,14 +2238,12 @@ static int _vconf_get_key_filesys(keynode_t *keynode, int prefix, int* io_errno)
 		case VCONF_TYPE_DOUBLE:
 		{
 			double value_dbl = 0;
-			int read_size = 0;
 			read_size = fread((void*)&value_dbl, sizeof(double), 1, fp);
 			if((read_size <= 0) || (read_size > sizeof(double))) {
-				if(ferror(fp)) {
-					err_no = errno;
-				} else {
-					errno = EAGAIN;
+				if(!ferror(fp)) {
+					ERR("number of read items for value is wrong. err : %d", errno);
 				}
+				err_no = errno;
 				func_ret = VCONF_ERROR_FILE_FREAD;
 				goto out_unlock;
 			} else {
@@ -1923,14 +2255,12 @@ static int _vconf_get_key_filesys(keynode_t *keynode, int prefix, int* io_errno)
 		case VCONF_TYPE_BOOL:
 		{
 			int value_int = 0;
-			int read_size = 0;
 			read_size = fread((void*)&value_int, sizeof(int), 1, fp);
 			if((read_size <= 0) || (read_size > sizeof(int))) {
-				if(ferror(fp)) {
-					err_no = errno;
-				} else {
-					errno = EAGAIN;
+				if(!ferror(fp)) {
+					ERR("number of read items for value is wrong. err : %d", errno);
 				}
+				err_no = errno;
 				func_ret = VCONF_ERROR_FILE_FREAD;
 				goto out_unlock;
 			} else {
@@ -1983,42 +2313,72 @@ static int _vconf_get_key_filesys(keynode_t *keynode, int prefix, int* io_errno)
 			break;
 		}
 		default :
-#ifdef SUPPORT_ELEKTRA_VALUE_FORMAT
-			func_ret = _vconf_get_key_elektra_format(keynode, fp);
-#else
 			func_ret = VCONF_ERROR_WRONG_TYPE;
-#endif
 	}
 
 out_unlock :
-#ifdef VCONF_USE_SQLFS_TRANSACTION
-	if (prefix != VCONF_BACKEND_DB)
-#endif
+	ret = _vconf_set_unlock(fileno(fp));
+	if(ret == -1) {
+		func_ret = VCONF_ERROR_FILE_LOCK;
+		err_no = errno;
+		goto out_return;
+	}
+
+
+out_return :
+	if (func_ret != VCONF_OK)
 	{
-#ifdef VCONF_USE_LOCK_FILE
-		ret = _vconf_set_unlock(fileno(lckfp));
-#else
-		ret = _vconf_set_unlock(fileno(fp));
+#ifdef _APPFW_FEATURE_VCONF_MODULE_RESTORE_KEY
+		if((func_ret == VCONF_ERROR_FILE_OPEN) &&
+			(err_no == ENOENT))
+		{
+			if(retry_cnt > VCONF_ERROR_RETRY_CNT)
+			{
+				ERR("vconf key(%s) does not exist and key restoration is not completed.",keynode->keyname);
+				goto out_func;
+			} else if(retry_cnt > 0) {
+				ERR("key(%s) restoration is not completed. retry cnt(%d)",keynode->keyname, retry_cnt);
+				retry_cnt++;
+				usleep(VCONF_ERROR_RETRY_SLEEP_UTIME*4);
+				goto retry_open;
+			}
+		}
 #endif
-		if(ret == -1) {
-			func_ret = VCONF_ERROR_FILE_LOCK;
-			err_no = errno;
-			goto out_close;
+		strerror_r(err_no, err_buf, 100);
+		if (_vconf_check_retry_err(keynode, func_ret, err_no, VCONF_OP_GET))
+		{
+			if (retry_cnt < VCONF_ERROR_RETRY_CNT)
+			{
+				WARN("_vconf_get_key_filesys(%s) step(%d) failed(%d / %s) retry(%d)",
+					keynode->keyname, func_ret, err_no, err_buf, retry_cnt);
+				retry_cnt++;
+				usleep((retry_cnt)*VCONF_ERROR_RETRY_SLEEP_UTIME);
+
+				if (fp)
+					goto retry;
+				else
+					goto retry_open;
+			}
+			else
+			{
+				ERR("_vconf_get_key_filesys(%s) step(%d) faild(%d / %s) over the retry count.",
+					keynode->keyname, func_ret, err_no, err_buf);
+			}
+		}
+		else
+		{
+			ERR("_vconf_get_key_filesys(%s) step(%d) failed(%d / %s) retry(%d) ",
+				keynode->keyname, func_ret, err_no, err_buf, retry_cnt);
+		}
+	} else {
+		if(retry_cnt > 0) {
+			DBG("vconf get filesys ok with retry cnt(%d)", retry_cnt);
 		}
 	}
 
-out_close :
-	fclose(fp);
-#ifdef VCONF_USE_LOCK_FILE
-	if(lckfp)
-		fclose(lckfp);
-#endif
-
-out_return :
-	if(err_no != 0) {
-		strerror_r(err_no, err_buf, 100);
-		ERR("_vconf_get_key_filesys(%d-%s) step(%d) failed(%d / %s)\n", keynode->type, keynode->keyname, func_ret, err_no, err_buf);
-	}
+out_func :
+	if (fp)
+		fclose(fp);
 
 	*io_errno = err_no;
 
@@ -2028,108 +2388,28 @@ out_return :
 
 int _vconf_get_key(keynode_t *keynode)
 {
-	int func_ret = VCONF_OK;
 	int ret = 0;
-	int is_busy_err = 0;
-	int retry = -1;
 	int prefix = 0;
 	int io_errno = 0;
+	char err_buf[100] = {0,};
 
 	ret = _vconf_get_key_prefix(keynode->keyname, &prefix);
 	retv_if(ret != VCONF_OK, ret);
 
-#ifdef VCONF_USE_SQLFS_TRANSACTION
-	if(prefix == VCONF_BACKEND_DB) {
-		_vconf_db_begin_transaction();
-	}
-#endif
-
-	while((ret = _vconf_get_key_filesys(keynode, prefix, &io_errno)) != VCONF_OK)
-	{
-		is_busy_err = 0;
-		retry++;
-
-		g_posix_errno = io_errno;
-		g_vconf_errno = ret;
-
-#ifdef VCONF_CHECK_INITIALIZED
-		if(VCONF_NOT_INITIALIZED)
-		{
-			ERR("%s : vconf is not initialized\n", keynode->keyname);
-			is_busy_err = 1;
-		}
-		else if(ret == VCONF_ERROR_FILE_OPEN)
-#else
-		if(ret == VCONF_ERROR_FILE_OPEN)
-#endif
-		{
-			switch (errno)
-			{
-				case EAGAIN :
-				case EMFILE :
-				case ETXTBSY :
-				{
-					is_busy_err = 1;
-				}
-			}
-		}
-		else if (ret == VCONF_ERROR_FILE_LOCK)
-		{
-			switch (errno)
-			{
-				case EBADF :
-				case EACCES :
-				case EAGAIN :
-				case ENOLCK :
-				{
-					is_busy_err = 1;
-				}
-			}
-		}
-		else if (ret == VCONF_ERROR_FILE_FREAD)
-		{
-			switch (errno)
-			{
-				case EAGAIN :
-				case EINTR :
-				case EIO :
-				{
-					is_busy_err = 1;
-				}
-			}
-		}
-		else
-		{
-			is_busy_err = 0;
-		}
-
-		if ((is_busy_err == 1) && (retry < VCONF_ERROR_RETRY_CNT)) {
-			WARN("%s : read buf error(%d / errno - %d). read will be retried(%d) , %d\n", keynode->keyname, ret, errno, retry, (retry)*VCONF_ERROR_RETRY_SLEEP_UTIME);
-			usleep((retry)*VCONF_ERROR_RETRY_SLEEP_UTIME);
-			continue;
-		} else {
-			ERR("%s : read buf error(%d). break\n",  keynode->keyname, ret);
-			func_ret = VCONF_ERROR;
-			break;
-		}
-	}
-
+	ret = _vconf_get_key_filesys(keynode, prefix, &io_errno);
 	if(ret == VCONF_OK) {
 		g_posix_errno = VCONF_OK;
 		g_vconf_errno = VCONF_OK;
 	}
-
-#ifdef VCONF_USE_SQLFS_TRANSACTION
-	if(prefix == VCONF_BACKEND_DB) {
-		if(func_ret == VCONF_ERROR) {
-			_vconf_db_rollback_transaction();
-		} else {
-			_vconf_db_commit_transaction();
-		}
+	else
+	{
+		strerror_r(io_errno, err_buf, 100);
+		ERR("_vconf_get_key(%s) step(%d) failed(%d / %s)\n", keynode->keyname, ret, io_errno, err_buf);
+		g_posix_errno = io_errno;
+		g_vconf_errno = ret;
 	}
-#endif
 
-	return func_ret;
+	return ret;
 }
 
 /*
@@ -2224,12 +2504,6 @@ API int vconf_get(keylist_t *keylist, const char *dirpath, get_option_t option)
 	ret = _vconf_get_key_prefix(dirpath, &prefix);
 	retv_if(ret != VCONF_OK, ret);
 
-#ifdef VCONF_USE_SQLFS_TRANSACTION
-	if(prefix == VCONF_BACKEND_DB) {
-		_vconf_db_begin_transaction();
-	}
-#endif
-
 	is_dir = _vconf_path_is_dir(full_path);
 	if(is_dir == 1) {
 		if((dir=opendir(full_path)) == NULL) {
@@ -2265,6 +2539,13 @@ API int vconf_get(keylist_t *keylist, const char *dirpath, get_option_t option)
 			} else {
 				snprintf(file_path, VCONF_KEY_PATH_LEN, "%s/%s", dirpath, entry.d_name);
 				snprintf(full_file_path, VCONF_KEY_PATH_LEN, "%s/%s", full_path, entry.d_name);
+			}
+
+			const char *chrptr = NULL;
+			chrptr = strchr(file_path, (int)VCONF_CONVERSION_CHAR);
+			while(chrptr) {
+				file_path[chrptr-file_path] = '/';
+				chrptr = strchr(chrptr+1, (int)VCONF_CONVERSION_CHAR);
 			}
 #else
 			snprintf(file_path, VCONF_KEY_PATH_LEN, "%s/%s", dirpath, entry.d_name);
@@ -2343,16 +2624,6 @@ API int vconf_get(keylist_t *keylist, const char *dirpath, get_option_t option)
 	vconf_keylist_rewind(keylist);
 
 out_unlock:
-#ifdef VCONF_USE_SQLFS_TRANSACTION
-	if(prefix == VCONF_BACKEND_DB) {
-		if(func_ret == VCONF_ERROR) {
-			_vconf_db_rollback_transaction();
-		} else {
-			_vconf_db_commit_transaction();
-		}
-	}
-#endif
-
 	return func_ret;
 }
 
@@ -2394,6 +2665,47 @@ API int vconf_get_int(const char *in_key, int *intval)
 	return func_ret;
 }
 
+#ifdef VCONF_SUPPORT_ZONE
+API int vconf_get_int_zone(const char *in_key, int *intval, const char *zone_name)
+{
+	START_TIME_CHECK
+
+	retvm_if(in_key == NULL, VCONF_ERROR, "Invalid argument: key is null");
+	retvm_if(intval == NULL, VCONF_ERROR, "Invalid argument: output buffer is null");
+
+	int func_ret = VCONF_ERROR;
+	keynode_t* pKeyNode = _vconf_keynode_new();
+	retvm_if(pKeyNode == NULL, VCONF_ERROR, "key malloc fail");
+
+	_vconf_keynode_set_keyname(pKeyNode, in_key);
+
+	func_ret = _vconf_keynode_set_zone(pKeyNode, zone_name);
+	if(func_ret != VCONF_OK) {
+		_vconf_keynode_free(pKeyNode);
+		ERR("set zone name error");
+		return VCONF_ERROR;
+	}
+
+	if (_vconf_get_key(pKeyNode) != VCONF_OK)
+		ERR("vconf_get_int(%d) : %s error", getpid(), in_key);
+	else {
+		*intval = pKeyNode->value.i;
+		if(pKeyNode->type == VCONF_TYPE_INT) {
+			INFO("%s(%d) success", in_key, *intval);
+			func_ret = VCONF_OK;
+		} else {
+			ERR("The type(%d) of keynode(%s) is not INT", pKeyNode->type, pKeyNode->keyname);
+		}
+	}
+
+	_vconf_keynode_free(pKeyNode);
+
+	END_TIME_CHECK
+
+	return func_ret;
+}
+#endif
+
 /*
  * This function get the boolean value of given key
  * @param[in]	in_key	key
@@ -2432,6 +2744,47 @@ API int vconf_get_bool(const char *in_key, int *boolval)
 	return func_ret;
 }
 
+#ifdef VCONF_SUPPORT_ZONE
+API int vconf_get_bool_zone(const char *in_key, int *boolval, const char *zone_name)
+{
+	START_TIME_CHECK
+
+	retvm_if(in_key == NULL, VCONF_ERROR, "Invalid argument: key is null");
+	retvm_if(boolval == NULL, VCONF_ERROR, "Invalid argument: output buffer is null");
+
+	int func_ret = VCONF_ERROR;
+	keynode_t* pKeyNode = _vconf_keynode_new();
+	retvm_if(pKeyNode == NULL, VCONF_ERROR, "key malloc fail");
+
+	_vconf_keynode_set_keyname(pKeyNode, in_key);
+
+	func_ret = _vconf_keynode_set_zone(pKeyNode, zone_name);
+	if(func_ret != VCONF_OK) {
+		_vconf_keynode_free(pKeyNode);
+		ERR("set zone name error");
+		return VCONF_ERROR;
+	}
+
+	if (_vconf_get_key(pKeyNode) != VCONF_OK)
+		ERR("vconf_get_bool(%d) : %s error", getpid(), in_key);
+	else {
+		*boolval = !!(pKeyNode->value.b);
+		if(pKeyNode->type == VCONF_TYPE_BOOL) {
+			INFO("%s(%d) success", in_key, *boolval);
+			func_ret = VCONF_OK;
+		} else {
+			ERR("The type(%d) of keynode(%s) is not BOOL", pKeyNode->type, pKeyNode->keyname);
+		}
+	}
+
+	_vconf_keynode_free(pKeyNode);
+
+	END_TIME_CHECK
+
+	return func_ret;
+}
+#endif
+
 /*
  * This function get the double value of given key
  * @param[in]	in_key	key
@@ -2469,6 +2822,47 @@ API int vconf_get_dbl(const char *in_key, double *dblval)
 
 	return func_ret;
 }
+
+#ifdef VCONF_SUPPORT_ZONE
+API int vconf_get_dbl_zone(const char *in_key, double *dblval, const char *zone_name)
+{
+	START_TIME_CHECK
+
+	retvm_if(in_key == NULL, VCONF_ERROR, "Invalid argument: key is null");
+	retvm_if(dblval == NULL, VCONF_ERROR, "Invalid argument: output buffer is null");
+
+	int func_ret = VCONF_ERROR;
+	keynode_t* pKeyNode = _vconf_keynode_new();
+	retvm_if(pKeyNode == NULL, VCONF_ERROR, "key malloc fail");
+
+	_vconf_keynode_set_keyname(pKeyNode, in_key);
+
+	func_ret = _vconf_keynode_set_zone(pKeyNode, zone_name);
+	if(func_ret != VCONF_OK) {
+		_vconf_keynode_free(pKeyNode);
+		ERR("set zone name error");
+		return VCONF_ERROR;
+	}
+
+	if (_vconf_get_key(pKeyNode) != VCONF_OK)
+		ERR("vconf_get_dbl(%d) : %s error", getpid(), in_key);
+	else {
+		*dblval = pKeyNode->value.d;
+
+		if(pKeyNode->type == VCONF_TYPE_DOUBLE) {
+			INFO("%s(%f) success", in_key, *dblval);
+			func_ret = VCONF_OK;
+		} else
+			ERR("The type(%d) of keynode(%s) is not DBL", pKeyNode->type, pKeyNode->keyname);
+	}
+
+	_vconf_keynode_free(pKeyNode);
+
+	END_TIME_CHECK
+
+	return func_ret;
+}
+#endif
 
 /*
  * This function get the string value of given key
@@ -2511,6 +2905,46 @@ API char *vconf_get_str(const char *in_key)
 	return strval;
 }
 
+#ifdef VCONF_SUPPORT_ZONE
+API char *vconf_get_str_zone(const char *in_key, const char *zone_name)
+{
+	START_TIME_CHECK
+
+	retvm_if(in_key == NULL, NULL, "Invalid argument: key is null");
+
+	keynode_t* pKeyNode = _vconf_keynode_new();
+	retvm_if(pKeyNode == NULL, NULL, "key malloc fail");
+
+	_vconf_keynode_set_keyname(pKeyNode, in_key);
+
+	_vconf_keynode_set_zone(pKeyNode, zone_name);
+
+	char *strval = NULL;
+	char *tempstr = NULL;
+
+	if (_vconf_get_key(pKeyNode) != VCONF_OK) {
+		ERR("vconf_get_str(%d) : %s error", getpid(), in_key);
+	} else {
+		if(pKeyNode->type == VCONF_TYPE_STRING)
+			tempstr = pKeyNode->value.s;
+		else
+			//FATAL("The type(%d) of keynode(%s) is not STR", pKeyNode->type, pKeyNode->keyname);
+			ERR("The type(%d) of keynode(%s) is not STR", pKeyNode->type, pKeyNode->keyname);
+
+		if(tempstr) {
+			strval = strdup(tempstr);
+			INFO("%s(%s) success", in_key, strval);
+		}
+	}
+
+	_vconf_keynode_free(pKeyNode);
+
+	END_TIME_CHECK
+
+	return strval;
+}
+#endif
+
 /*
  * This function unset given key
  * @param[in]	in_key	key
@@ -2518,7 +2952,11 @@ API char *vconf_get_str(const char *in_key)
  */
 API int vconf_unset(const char *in_key)
 {
-	START_TIME_CHECK
+
+#ifdef DISABLE_RUNTIME_KEY_CREATION
+	ERR("Unset key is not permitted.");
+	return VCONF_ERROR_NOT_SUPPORTED;
+#endif
 
 	char path[VCONF_KEY_PATH_LEN] = {0,};
 	int ret = -1;
@@ -2557,7 +2995,11 @@ API int vconf_unset(const char *in_key)
  */
 API int vconf_unset_recursive(const char *in_dir)
 {
-	START_TIME_CHECK
+
+#ifdef DISABLE_RUNTIME_KEY_CREATION
+	ERR("Unset key is not permitted.");
+	return VCONF_ERROR_NOT_SUPPORTED;
+#endif
 
 	DIR *dir = NULL;
 	struct dirent entry;
@@ -2590,9 +3032,9 @@ API int vconf_unset_recursive(const char *in_dir)
 	snprintf(key_name, VCONF_KEY_PATH_LEN, "%s", split_key+1);
 
 	if(key_name[strlen(key_name)-1] == '/') {
-		key_name[strlen(key_name)-1] = '+';
+		key_name[strlen(key_name)-1] = VCONF_CONVERSION_CHAR;
 	} else {
-		key_name[strlen(key_name)] = '+';
+		key_name[strlen(key_name)] = VCONF_CONVERSION_CHAR;
 	}
 #else
 	ret = _vconf_get_key_path(in_dir, dirpath);
@@ -2682,7 +3124,74 @@ API int vconf_notify_key_changed(const char *in_key, vconf_callback_fn cb, void 
 	retvm_if(in_key == NULL, VCONF_ERROR, "Invalid argument: key is null");
 	retvm_if(cb == NULL, VCONF_ERROR, "Invalid argument: cb(%p)", cb);
 
+#ifdef _APPFW_FEATURE_VCONF_MODULE_RESTORE_KEY
+	int retry_cnt = 0;
+#endif
+
+retry :
 	if (_vconf_kdb_add_notify(in_key, cb, user_data)) {
+		if(errno == ENOENT) {
+#ifdef _APPFW_FEATURE_VCONF_MODULE_RESTORE_KEY
+			if(retry_cnt == 0) {
+				int rc = 0;
+				rc = _vconf_restore_key(in_key);
+				if(rc == VCONF_OK) {
+					WARN("vconf key(%s) does not exist. key will be restored.", in_key);
+					retry_cnt++;
+		            usleep(VCONF_ERROR_RESTORE_SLEEP_UTIME);
+					goto retry;
+				}
+			} else {
+				if(retry_cnt > VCONF_ERROR_RETRY_CNT)
+				{
+					ERR("vconf key(%s) does not exist and key restoration is not completed.",in_key);
+					return VCONF_ERROR;
+				} else if(retry_cnt > 0) {
+					WARN("key(%s) restoration is not completed. retry cnt(%d)",in_key, retry_cnt);
+					retry_cnt++;
+					usleep(VCONF_ERROR_RETRY_SLEEP_UTIME*4);
+					goto retry;
+				}
+			}
+#endif
+
+#ifdef VCONF_CHECK_NOENT_ERR
+	#ifdef VCONF_CHECK_NOENT_ERR_ASSERT
+			_vconf_check_noent_err_assert();
+	#endif
+			return VCONF_ERROR;
+#endif
+			ERR("vconf key(%s) does not exist", in_key);
+		}
+
+		if(errno != EALREADY) {
+			ERR("vconf_notify_key_changed : key(%s) add notify fail", in_key);
+		}
+		return VCONF_ERROR;
+	}
+
+#ifdef _APPFW_FEATURE_VCONF_MODULE_RESTORE_KEY
+	if(retry_cnt > 0) {
+		WARN("noti is added with key restoation");
+	}
+#endif
+
+	INFO("%s noti is added", in_key);
+
+	END_TIME_CHECK
+
+	return VCONF_OK;
+}
+
+#ifdef VCONF_SUPPORT_ZONE
+API int vconf_notify_key_changed_zone(const char *in_key, vconf_callback_fn cb, void *user_data, const char *zone_name)
+{
+	START_TIME_CHECK
+
+	retvm_if(in_key == NULL, VCONF_ERROR, "Invalid argument: key is null");
+	retvm_if(cb == NULL, VCONF_ERROR, "Invalid argument: cb(%p)", cb);
+
+	if (_vconf_kdb_add_notify_zone(in_key, cb, user_data, zone_name)) {
 		if(errno != EALREADY) {
 			ERR("vconf_notify_key_changed : key(%s) add notify fail", in_key);
 		}
@@ -2695,6 +3204,7 @@ API int vconf_notify_key_changed(const char *in_key, vconf_callback_fn cb, void 
 
 	return VCONF_OK;
 }
+#endif
 
 API int vconf_ignore_key_changed(const char *in_key, vconf_callback_fn cb)
 {
@@ -2716,6 +3226,29 @@ API int vconf_ignore_key_changed(const char *in_key, vconf_callback_fn cb)
 
 	return VCONF_OK;
 }
+
+#ifdef VCONF_SUPPORT_ZONE
+API int vconf_ignore_key_changed_zone(const char *in_key, vconf_callback_fn cb, const char *zone_name)
+{
+	START_TIME_CHECK
+
+	retvm_if(in_key == NULL, VCONF_ERROR, "Invalid argument: key is null");
+	retvm_if(cb == NULL, VCONF_ERROR, "Invalid argument: cb(%p)", cb);
+
+	if (_vconf_kdb_del_notify_zone(in_key, cb, zone_name)) {
+		if(errno != ENOENT) {
+			ERR("vconf_ignore_key_changed() failed: key(%s)", in_key);
+		}
+		return VCONF_ERROR;
+	}
+
+	INFO("%s noti removed", in_key);
+
+	END_TIME_CHECK
+
+	return VCONF_OK;
+}
+#endif
 
 API int vconf_get_ext_errno(void)
 {

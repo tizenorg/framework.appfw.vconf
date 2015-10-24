@@ -19,7 +19,6 @@
 #define __TIZEN_STORAGEFW_VCONF_DOC_H__
 
 /**
- * @internal
  * @ingroup StorageFW
  * @defgroup StorageFW_VCONF_MODULE VCONF
  * @brief  A library for reading/writing the Configuration Data.

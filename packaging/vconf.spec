@@ -1,6 +1,6 @@
 Name:       vconf
 Summary:    Configuration system library
-Version:    0.2.83
+Version:    0.2.84
 Release:    1
 Group:      System/Libraries
 License:    Apache-2.0
@@ -11,6 +11,7 @@ Requires(post): /sbin/ldconfig, systemd
 Requires(postun): /sbin/ldconfig, systemd
 BuildRequires:  cmake
 BuildRequires:  pkgconfig(glib-2.0)
+BuildRequires:  pkgconfig(dbus-1)
 BuildRequires:  pkgconfig(dlog)
 BuildRequires:  pkgconfig(vconf-internal-keys)
 BuildRequires:	pkgconfig(libsmack)
@@ -49,7 +50,30 @@ export FFLAGS="$FFLAGS -DTIZEN_DEBUG_ENABLE"
 export CFLAGS="$CFLAGS -Wall -Werror"
 export CFLAGS="$CFLAGS -Wno-unused-function -Wno-unused-but-set-variable"
 
-cmake . -DCMAKE_INSTALL_PREFIX=%{_prefix}
+%define appfw_feature_vconf_module_dump 1
+%define appfw_feature_vconf_restore_key 1
+%define appfw_feature_vconf_smack_whitelist 0
+
+%if 0%{?appfw_feature_vconf_module_dump}
+_APPFW_FEATURE_VCONF_MODULE_DUMP=ON
+%endif
+
+%if 0%{?appfw_feature_vconf_restore_key}
+ _APPFW_FEATURE_VCONF_MODULE_RESTORE_KEY=ON
+%endif
+
+%if 0%{?appfw_feature_vconf_smack_whitelist}
+ _APPFW_FEATURE_VCONF_SMACK_WHITELIST=ON
+%endif
+
+
+ _APPFW_FEATURE_VCONF_ZONE=ON
+
+cmake . -DCMAKE_INSTALL_PREFIX=%{_prefix} \
+	-D_APPFW_FEATURE_VCONF_ZONE:BOOL=${_APPFW_FEATURE_VCONF_ZONE} \
+	-D_APPFW_FEATURE_VCONF_MODULE_DUMP:BOOL=${_APPFW_FEATURE_VCONF_MODULE_DUMP} \
+	-D_APPFW_FEATURE_VCONF_MODULE_RESTORE_KEY:BOOL=${_APPFW_FEATURE_VCONF_MODULE_RESTORE_KEY} \
+	.
 
 make %{?jobs:-j%jobs}
 
@@ -58,9 +82,8 @@ rm -rf %{buildroot}
 %make_install
 
 mkdir -p %{buildroot}/opt/var/kdb/db
-mkdir -p %{buildroot}/opt/var/kdb/db/.backup
 mkdir -p %{buildroot}/opt/var/kdb/file
-mkdir -p %{buildroot}/opt/var/kdb/file/.backup
+mkdir -p %{buildroot}/opt/var/kdb/memory_init
 mkdir -p %{buildroot}/tmp
 #touch %{buildroot}/opt/var/kdb/.vconf_lock
 mkdir -p %{buildroot}%{_libdir}/systemd/system/basic.target.wants
@@ -70,10 +93,17 @@ install -m0644 %SOURCE2 %{buildroot}%{_libdir}/tmpfiles.d/
 ln -sf ../vconf-setup.service %{buildroot}%{_libdir}/systemd/system/basic.target.wants/
 mkdir -p %{buildroot}/usr/share/license
 install LICENSE.APLv2 %{buildroot}/usr/share/license/%{name}
+%if 0%{?appfw_feature_vconf_restore_key}
+mkdir -p %{buildroot}/opt/var/kdb/.restore/.history
+%endif
+
 
 %post
 /sbin/ldconfig
 systemctl daemon-reload
+%if 0%{?appfw_feature_vconf_restore_key}
+chsmack -a "*" /opt/var/kdb/.restore
+%endif
 
 %postun
 /sbin/ldconfig
@@ -84,19 +114,26 @@ systemctl daemon-reload
 %defattr(-,root,root,-)
 %attr(755,root,root) %{_sysconfdir}/rc.d/init.d/vconf-init
 %{_bindir}/vconftool
+%{_bindir}/vconftool2
 %config(missingok) %attr(644,root,root) /opt/var/kdb/kdb_first_boot
 %{_libdir}/*.so.*
 %dir %attr(777,root,root) /opt/var/kdb/db
-%dir %attr(777,root,root) /opt/var/kdb/db/.backup
 %dir %attr(777,root,root) /opt/var/kdb/file
-%dir %attr(777,root,root) /opt/var/kdb/file/.backup
+%dir %attr(777,root,root) /opt/var/kdb/memory_init
 #/opt/var/kdb/.vconf_lock
 %{_libdir}/systemd/system/basic.target.wants/vconf-setup.service
 %{_libdir}/systemd/system/vconf-setup.service
 %{_libdir}/tmpfiles.d/vconf-setup.conf
 /usr/share/license/%{name}
-#/etc/opt/upgrade/001.vconf.patch.sh
-#%attr(755,root,root) /etc/opt/upgrade/001.vconf.patch.sh
+%if 0%{?appfw_feature_vconf_module_dump}
+%attr(755,root,root) /opt/etc/dump.d/module.d/vconf_dump.sh
+%endif
+%if 0%{?appfw_feature_vconf_restore_key}
+%dir %attr(777,root,root) /opt/var/kdb/.restore/
+%dir %attr(700,root,root) /opt/var/kdb/.restore/.history/
+%attr(700,root,root) %{_bindir}/vconf-restore-key.sh
+/usr/share/dbus-1/system-services/org.vconf.restore.service
+%endif
 
 %files devel
 %defattr(-,root,root,-)
@@ -107,34 +144,3 @@ systemctl daemon-reload
 %files keys-devel
 %defattr(-,root,root,-)
 %{_includedir}/vconf/vconf-keys.h
-
-%changelog
-* Wed Jun 25 2014 - Hyungdeuk Kim <hd3.kim@samsung.com>
-- Fix vconf unset recursive error under COMBINE FOLDER define
-- Make folder & change attr folder for file key
-
-* Wed Mar 19 2014 - Hyungdeuk Kim <hd3.kim@samsung.com>
-- Add ag connected value for VCONFKEY_BT_DEVICE key
-
-* Wed Feb 05 2014 - Hyungdeuk Kim <hd3.kim@samsung.com>
-- Directory smack label set time is changed (from first boot to creation time)
-
-* Fri Sep 06 2013 - Hyungdeuk Kim <hd3.kim@samsung.com>
-- Add new api for getting last file error at vconf_get*,vconf_set* api
-
-* Tue Oct 23 2012 - SeungYeup Kim <sy2004.kim@samsung.com>
-- Add thread safe code
-
-* Tue Sep 18 2012 - SeungYeup Kim <sy2004.kim@samsung.com>
-- Add 4 public keys (Browser User Agent)
-
-* Tue Aug 28 2012 - SeungYeup Kim <sy2004.kim@samsung.com>
-- Remove memory leak
-- Remove use after free
-
-* Tue Aug 14 2012 - Hyungdeuk Kim <hd3.kim@samsung.com>
-- Fix issues related prevent
-- Fix warning msg at build time
-
-* Mon Jul 23 2012 - SeungYeup Kim <sy2004.kim@samsung.com>
-- Enable -f option for force update

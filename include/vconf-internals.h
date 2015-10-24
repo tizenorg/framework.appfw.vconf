@@ -41,6 +41,12 @@
 #define BACKEND_SYSTEM_DIR "/opt/var/kdb/"
 #define BACKEND_MEMORY_DIR "/var/run/"
 
+#ifdef VCONF_SUPPORT_ZONE
+#define ZONE_PREFIX_PATH "/var/lib/lxc/"
+#define ZONE_INFIX_PATH "/rootfs"
+#define ZONE_BACKEND_MEMORY_DIR "/run/"
+#endif
+
 /* This value can be optimized according to the device characteristcs and file system configuration */
 #define FILE_ATOMIC_GUARANTEE_SIZE 	4096
 
@@ -50,8 +56,14 @@
 #define BUF_LEN 		1024
 #define ERR_LEN 		128
 
+#ifdef VCONF_SUPPORT_ZONE
+#define VCONF_ZONE_NAME_LEN 	1024
+#endif
+
 #define VCONF_TYPE_SIZE	sizeof(int)
 #define VCONF_BACKUP_COMP_MARK_SIZE	sizeof(int)
+
+#define VCONF_CONVERSION_CHAR '+'
 
 enum {
 	VCONF_BACKEND_NULL = 0,
@@ -59,6 +71,10 @@ enum {
 	VCONF_BACKEND_FILE,
 	VCONF_BACKEND_MEMORY
 };
+
+#ifdef _APPFW_FEATURE_VCONF_MODULE_RESTORE_KEY
+#define VCONF_INSTALL_LIST "/opt/var/kdb/.vconf_install_list"
+#endif
 
 #if 0
 enum {
@@ -156,8 +172,20 @@ int _vconf_kdb_add_notify
 int _vconf_kdb_del_notify
 	(const char *keyname, vconf_callback_fn cb);
 
+#ifdef VCONF_SUPPORT_ZONE
+int _vconf_kdb_add_notify_zone
+	(const char *keyname, vconf_callback_fn cb, void *data, const char *zone_name);
+int _vconf_kdb_del_notify_zone
+	(const char *keyname, vconf_callback_fn cb, const char *zone_name);
+#endif
+
 int _vconf_get_key_path(const char *keyname, char *path);
 int _vconf_get_key(keynode_t *keynode);
+
+#ifdef VCONF_SUPPORT_ZONE
+int _vconf_get_key_path_zone(const char *keyname, char *path, const char *zone_name );
+int _vconf_keynode_set_zone(keynode_t *keynode, const char *zone_name);
+#endif
 
 int _vconf_keynode_set_keyname(keynode_t *keynode, const char *keyname);
 inline void _vconf_keynode_set_null(keynode_t *keynode);

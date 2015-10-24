@@ -87,8 +87,9 @@ int main(int argc, char **argv)
 {
    int i;
 //   char temp[100]="/opt/var/kdb/";
-
+#if !GLIB_CHECK_VERSION(2,35,0)
    g_type_init();
+#endif
    ecore_init();
 
    event_loop = g_main_loop_new(NULL, FALSE);

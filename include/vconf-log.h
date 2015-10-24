@@ -26,10 +26,16 @@
 #include <unistd.h>
 #include <stdlib.h>
 
-#define VCONF_DLOG_OUT
+#define VCONF_DLOG 1
+#define VCONF_SYSLOG 2
+#define VCONF_PRINTLOG 3
+
+#ifndef VCONF_LOG
+#define VCONF_LOG VCONF_DLOG
+#endif
 
 /************** Error ***************/
-#ifdef VCONF_SYSLOG_OUT
+#if VCONF_LOG == VCONF_SYSLOG
 	#include <syslog.h>
 
 	#define INFO(fmt, arg...) \
@@ -53,38 +59,36 @@
 			syslog(LOG_ERR, "[%s:%d] "fmt"\n", __FILE__, __LINE__, ##arg); \
 		}while(0)
 
-#elif defined(VCONF_DLOG_OUT)
+#elif VCONF_LOG == VCONF_DLOG
 	#define LOG_TAG	"VCONF"
 	#include <dlog.h>
 
 	#define INFO(fmt, arg...)
 	#define DBG(fmt, arg...) SECURE_SLOGI(fmt, ##arg)
-	#define ERR(fmt, arg...) SECURE_SLOGE(fmt, ##arg)
+	#define ERR(fmt, arg...) LOGE(fmt, ##arg)
+	#define SECURE_ERR(fmt, arg...) SECURE_SLOGE(fmt, ##arg)
 	#define FATAL(fmt, arg...) SECURE_SLOGF(fmt, ##arg)
 	#define WARN(fmt, arg...) SECURE_SLOGW(fmt, ##arg)
 
-#else
+#elif VCONF_LOG == VCONF_PRINTLOG
 	#include <stdlib.h>
 
-	#define INFO(fmt, arg...) \
-		do { \
-			fprintf(stdout,"[%s:%d] "fmt"\n", __FILE__, __LINE__, ##arg); \
-		}while(0)
+	#define INFO(fmt, arg...)
 	#define DBG(fmt, arg...) \
 		do { \
-			fprintf(stdout,"[%s:%d] "fmt"\n", __FILE__, __LINE__, ##arg); \
+			fprintf(stdout,fmt"\n", ##arg); \
 		}while(0)
 	#define WARN(fmt, arg...) \
 		do { \
-			fprintf(stderr,"[%s:%d] "fmt"\n", __FILE__, __LINE__, ##arg); \
+			fprintf(stderr,fmt"\n", ##arg); \
 		}while(0)
 	#define ERR(fmt, arg...) \
 		do { \
-			fprintf(stderr,"[%s:%d] "fmt"\n", __FILE__, __LINE__, ##arg); \
+			fprintf(stderr,fmt"\n", ##arg); \
 		}while(0)
 	#define FATAL(fmt, arg...) \
 		do { \
-			fprintf(stderr,"[%s:%d] "fmt"\n", __FILE__, __LINE__, ##arg); \
+			fprintf(stderr,fmt"\n", ##arg); \
 		}while(0)
 #endif
 

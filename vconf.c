@@ -2071,10 +2071,12 @@ static int _vconf_get_key_elektra_format(keynode_t *keynode, FILE *fp)
 	{
 		if(value) {
 			value_size = value_size + strlen(file_buf);
-			value = (char *) realloc(value, value_size);
-			if(value == NULL) {
+			char *tmp = (char *) realloc(value, value_size);
+			if(tmp == NULL) {
 				func_ret = VCONF_ERROR_NO_MEM;
 				break;
+			} else {
+				value = tmp;
 			}
 			strncat(value, file_buf, strlen(file_buf));
 		} else {
@@ -2279,10 +2281,12 @@ retry :
 			{
 				if(value) {
 					value_size = value_size + strlen(file_buf);
-					value = (char *) realloc(value, value_size);
-					if(value == NULL) {
+					char *tmp = (char *) realloc(value, value_size);
+					if(tmp == NULL) {
 						func_ret = VCONF_ERROR_NO_MEM;
 						break;
+					} else {
+						value = tmp;
 					}
 					strncat(value, file_buf, strlen(file_buf));
 				} else {
